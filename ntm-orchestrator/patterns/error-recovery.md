@@ -2,92 +2,233 @@
 
 ## Agent Crash
 
-**Detection:** `ntm health <session> --json` shows agent unhealthy, or `E > 0` in terse output.
+### Detection
+- `--robot-health=<session>` shows pane in error state
+- `--robot-status` JSON shows `error_count > 0`
+- Completion message missing after expected time
 
-**Recovery:**
-1. `--auto-restart` handles most crashes automatically
-2. If same agent crashes 3+ times, mark its task as failed
-3. If panes are available, spawn a replacement: `ntm add <session> --cc=1`
-4. Send the failed task's prompt to the new pane
-5. Record the failure in the intervention log
+### Recovery
 
-## Context Window Exhaustion
+1. **Single crash:** `--spawn-auto-restart` handles automatically. Monitor for recovery.
 
-**Detection:** Agent output contains handoff message, or agent goes idle mid-task with no completion message.
-
-**Recovery:**
-1. Capture current output: `ntm copy <session>:<pane> --last 300 --output /tmp/ntm-orch-<session>-handoff-<pane>.txt`
-2. Read the handoff to understand progress
-3. If a replacement pane is available, send a continuation prompt that includes:
-   - What was already done (from the handoff)
-   - What remains
-   - The original file scope
-4. If no panes available, note the partial completion and include it in the synthesis
-
-## FILE_RESERVATION_CONFLICT
-
-**Detection:** Agent reports conflict via Agent Mail, or reservation call returns conflict.
-
-**Recovery:**
-1. Determine which agent has priority (earlier assignment wins)
-2. Send the conflicting agent a narrowed scope or different task
-3. If scopes genuinely need to overlap, coordinate sequential access:
-   - Agent A finishes and releases → Agent B proceeds
-   - Use Agent Mail thread to coordinate the handoff
-
-## Git Merge Conflict
-
-**Detection:** Agent reports push failure or merge conflict via Agent Mail.
-
-**Recovery:**
-1. Instruct the agent to:
+2. **Repeated crashes (2x same pane):**
+   ```bash
+   # Check recent output for error
+   ntm --robot-tail=<session> --panes=<N> --lines=50
+   
+   # If recoverable error visible, send guidance
+   ntm --robot-send=<session> --pane=<N> --message="Retry with: <specific fix>"
    ```
-   git pull --rebase
-   # resolve conflicts
-   git add <resolved-files>
-   git rebase --continue
-   git push
+
+3. **Systemic failure (3+ crashes in 5 min):**
+   - Set `ESCALATION_NEEDED: systemic-failure`
+   - Present options to user: continue, pause, or abort
+
+### Anti-Pattern
+
+Don't manually restart agents — let `--spawn-auto-restart` handle it. Only escalate after 3+ failures.
+
+---
+
+## Git Conflicts
+
+### Detection
+- Agent Mail message with subject containing "conflict" or "rebase"
+- `--robot-tail` shows git error output
+
+### Recovery
+
+1. **Standard conflict:**
+   ```bash
+   ntm --robot-send=<session> --pane=<N> --message="Git conflict detected. Run:
+   git fetch origin
+   git rebase origin/main
+   # Resolve conflicts in your assigned files only
+   git add <files>
+   git rebase --continue"
    ```
-2. If the agent can't resolve (conflicting changes from another agent):
-   - Identify which agent's changes should take precedence
-   - Instruct the lower-priority agent to `git stash`, pull, then re-apply on top
-3. If persistent, this usually means file scopes weren't properly non-overlapping. Note for future manifest improvement.
 
-## Rate Limiting
+2. **Conflict in file outside agent's scope:**
+   - Arbitrate: agent with file reservation handles conflict
+   - Other agent waits or works on different task
 
-**Detection:** Agent output shows rate limit errors, or agent goes idle unexpectedly.
+3. **Stuck on conflict:**
+   ```bash
+   # Get current state
+   ntm --robot-tail=<session> --panes=<N> --lines=100
+   
+   # Provide specific resolution commands
+   ntm --robot-send=<session> --pane=<N> --file=/tmp/ntm-orch-<session>-conflict-help.md
+   ```
 
-**Recovery:**
-1. ntm has a `rotate` command for API key rotation: `ntm rotate <session>`
-2. If rotation isn't available, redistribute the task to a different agent type
-3. Note the rate-limited agent type in the synthesis (helps plan future sessions)
+---
 
-## Agent Stall
+## Context Exhaustion
 
-**Detection:** Agent shows idle for >10 minutes with no completion message and no questions in Agent Mail.
+### Detection
+- Agent reports "context limit" or "token limit"
+- Performance degradation (slow responses, incomplete work)
+- Agent explicitly requests refresh
 
-**Recovery:**
-1. First, nudge: `ntm send <session> -p <pane> "Status check: are you blocked? Reply via Agent Mail if you need help."`
-2. Wait 2 minutes for response
-3. If no response, check output: `ntm --robot-tail <session> --panes=<pane> --lines=50`
-4. If the agent is genuinely stuck (looping, confused), interrupt: `ntm interrupt <session>`
-5. Re-send the prompt or reassign to a different pane
+### Recovery: Context Refresh
 
-## Timeout
+**Claude Code panes:**
+```bash
+# 1. Capture state before refresh
+ntm --robot-copy=<session> --pane=<N> --last=100 --output=/tmp/ntm-orch-<session>-pre-refresh-<N>.txt
 
-**Detection:** Session duration exceeds the configured timeout (default: 60 minutes).
+# 2. Send refresh command
+ntm --robot-send=<session> --pane=<N> --message="/clear"
 
-**Recovery:**
-1. Do NOT immediately kill the session
-2. Check which agents are still working vs idle
-3. For working agents, send: "You have 5 minutes to wrap up. Commit what you have and send a status message."
-4. Wait 5 minutes
-5. Proceed to Phase 4 (Results Collection) regardless
-6. Mark incomplete tasks in the synthesis report
+# 3. Wait for refresh
+sleep 5
+
+# 4. Re-send task prompt with current state
+ntm --robot-send=<session> --pane=<N> --file=/tmp/ntm-orch-<session>-pane<N>.md
+```
+
+**Codex panes:**
+```bash
+ntm --robot-send=<session> --pane=<N> --message="/new"
+sleep 5
+ntm --robot-send=<session> --pane=<N> --file=/tmp/ntm-orch-<session>-pane<N>.md
+```
+
+### Tracking
+
+Increment `REFRESHES[pane]` after each refresh. After 2 refreshes on same task without progress:
+- Set `ESCALATION_NEEDED: systemic-failure`
+- Options: reassign task, split task smaller, or mark blocked
+
+---
+
+## Quality Gate Failure
+
+### Detection
+- Agent claims completion but `--robot-tail` shows failing gates
+- Completion message lacks gate confirmation
+
+### Recovery
+
+1. **First failure:**
+   ```bash
+   ntm --robot-send=<session> --pane=<N> --message="Quality gates required before completion. Run:
+   {{quality_gates}}
+   
+   Fix any failures before reporting complete."
+   ```
+
+2. **Repeated failure:**
+   - Check if it's a test environment issue vs code issue
+   - Provide specific guidance based on error output
+
+3. **Agent requests bypass:**
+   - Set `ESCALATION_NEEDED: quality-bypass`
+   - Never approve bypass automatically
+
+### Anti-Pattern
+
+Don't accept completion without verifying gates. Check `--robot-tail` output for gate passage.
+
+---
+
+## File Reservation Conflict
+
+### Detection
+- Agent Mail reports FILE_RESERVATION_CONFLICT
+- Two agents attempting same file
+
+### Recovery
+
+1. **Query current state:**
+   ```javascript
+   query_reservations({ project_key: 'slug' })
+   ```
+
+2. **Arbitrate:** Earlier reservation wins.
+
+3. **Notify losing agent:**
+   ```javascript
+   send_message({
+     project_key: 'slug',
+     sender_name: 'Orchestrator',
+     to: ['Pane-2'],
+     subject: '[conflict] Wait for Pane-1',
+     body_md: 'Pane-1 has reservation on these files. Wait for completion or work on different task.'
+   })
+   ```
+
+4. **Options for waiting agent:**
+   - Wait for other agent to complete
+   - Work on unrelated task
+   - If urgent, escalate for human decision
+
+---
+
+## Destructive Operation Request
+
+### Detection
+- Agent asks to delete tests, drop tables, remove files
+- Agent wants to modify security-sensitive files (.env, secrets)
+
+### Recovery
+
+**Always escalate.** Set `ESCALATION_NEEDED: destructive-op` or `security`.
+
+Present to user:
+```
+ESCALATION: destructive-op
+SITUATION: Pane-2 requests to delete src/__tests__/auth.test.ts
+OPTIONS:
+  A) Approve deletion (tests may be obsolete)
+  B) Deny - instruct agent to update tests instead
+  C) Pause agent and investigate
+RECOMMENDATION: B - prefer updating over deleting
+```
+
+---
 
 ## Multiple Simultaneous Failures
 
-If 3+ agents fail within a 5-minute window:
-1. Pause and assess — this likely indicates a systemic issue (API outage, bad base state, etc.)
-2. Escalate to user via AskUserQuestion with the failure details
-3. Options: retry the session, kill and investigate, or continue with remaining agents
+### Detection
+- 3+ agents in error state simultaneously
+- Multiple unrelated failures in short window
+
+### Recovery
+
+**Always escalate.** This indicates systemic issues.
+
+```
+ESCALATION: systemic-failure
+SITUATION: 3 agents failed in last 5 minutes
+  - Pane-1: API timeout
+  - Pane-3: Git conflict
+  - Pane-5: Process killed
+OPTIONS:
+  A) Continue monitoring (may recover)
+  B) Pause all work and investigate
+  C) Abort session and retry later
+RECOMMENDATION: B - investigate before continuing
+```
+
+---
+
+## Timeout Approaching
+
+### Detection
+- Session elapsed time > 80% of timeout
+- Completion < 60% of assigned tasks
+
+### Recovery
+
+**Always escalate.** Human decides: extend, reduce scope, or stop.
+
+```
+ESCALATION: timeout
+SITUATION: 48min of 60min elapsed, 4/10 tasks complete (40%)
+OPTIONS:
+  A) Extend timeout by 30 minutes
+  B) Mark incomplete tasks as blocked, proceed to collection
+  C) Prioritize specific tasks, abandon others
+RECOMMENDATION: Need your judgment based on task priorities
+```

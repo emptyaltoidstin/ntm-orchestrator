@@ -1,0 +1,253 @@
+# ntm-orchestrator v2.2 hook regression scenarios
+
+version: 2.2.2
+
+pre_tool_use:
+  # --- Robot-only enforcement ---
+  - name: block_ntm_subcommand_status
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm status"}
+    expect_exit: 2
+    expect_stderr_contains: "Non-robot ntm invocations are disallowed"
+
+  - name: block_ntm_subcommand_spawn
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm spawn foo --cc=1 --cod=0"}
+    expect_exit: 2
+
+  - name: block_ntm_bare_flags
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --some-unknown-flag"}
+    expect_exit: 2
+    expect_stderr_contains: "Non-robot ntm invocations"
+
+  - name: allow_ntm_robot_status
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-status"}
+    expect_exit: 0
+
+  - name: allow_ntm_help
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --help"}
+    expect_exit: 0
+
+  # --- bv TUI prevention ---
+  - name: block_bare_bv
+    input:
+      tool_name: Bash
+      tool_input: {command: "bv"}
+    expect_exit: 2
+
+  - name: block_bv_without_robot_flags
+    input:
+      tool_name: Bash
+      tool_input: {command: "bv plan"}
+    expect_exit: 2
+
+  - name: allow_bv_robot_plan
+    input:
+      tool_name: Bash
+      tool_input: {command: "bv --robot-plan"}
+    expect_exit: 0
+
+  # --- Allowlisted subcommands ---
+  - name: allow_ntm_send_subcommand
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm send trial01 --pane=2 --file=/tmp/prompt.md --json"}
+    expect_exit: 0
+
+  - name: allow_ntm_save_subcommand
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm save trial01 -o ./outputs"}
+    expect_exit: 0
+
+  # --- Non-Bash tool fast path ---
+  - name: allow_non_bash_tool
+    input:
+      tool_name: Read
+      tool_input: {file_path: "/some/file.ts"}
+    expect_exit: 0
+
+  # --- Capture-before-kill ---
+  - name: allow_ntm_kill_subcommand_with_recent_save
+    setup:
+      write_file:
+        path: ./outputs/trial01_cc_1_20260204_120000.txt
+        text: "captured output"
+      write_file_2:
+        path: /tmp/ntm-orch-trial01-state.json
+        json: {session: "trial01", spawned_at: "__NOW_ISO__"}
+      write_file_3:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        json: {session: "trial01"}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm kill trial01 --force"}
+    expect_exit: 0
+
+  - name: block_kill_without_recent_capture
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm kill foo --force"}
+    expect_exit: 2
+    expect_stderr_contains: "without a recent capture"
+
+  # --- Spawn: session marker lifecycle ---
+  - name: allow_spawn_when_marker_stale
+    # Global index exists for dead session (no tmux server) → stale → allow overwrite
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        json: {session: "dead-session"}
+      write_file_2:
+        path: /tmp/ntm-orch-dead-session-state.json
+        json: {session: "dead-session", spawned_at: "2026-01-01T00:00:00Z"}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-spawn=new-session --spawn-cc=2"}
+    expect_exit: 0
+
+  - name: allow_spawn_same_session_name
+    # Re-spawning the same session name is always allowed
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        json: {session: "foo"}
+      write_file_2:
+        path: /tmp/ntm-orch-foo-state.json
+        json: {session: "foo", spawned_at: "__NOW_ISO__"}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-spawn=foo --spawn-cc=2"}
+    expect_exit: 0
+
+  # NOTE: block_spawn_when_another_session_alive requires a live tmux session
+  # and cannot be tested in the offline harness. Verify manually:
+  #   1. ntm --robot-spawn=existing --spawn-cc=1
+  #   2. Attempt ntm --robot-spawn=new --spawn-cc=1 → should block
+
+  # --- Polling cadence ---
+  - name: allow_health_retry_within_spawn_grace_window
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-foo-state.json
+        json: {session: "foo", spawned_at: "__NOW_ISO__"}
+      write_file_2:
+        path: /tmp/ntm-orch-foo-hook-last-poll.json
+        json: {last_poll_ms: {"foo|health": "__NOW_MS_MINUS_11000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-health=foo"}
+    expect_exit: 0
+
+  - name: block_status_poll_under_90s_even_during_spawn_grace
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-foo-state.json
+        json: {session: "foo", spawned_at: "__NOW_ISO__"}
+      write_file_2:
+        path: /tmp/ntm-orch-foo-hook-last-poll.json
+        json: {last_poll_ms: {"foo|status": "__NOW_MS_MINUS_30000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-status=foo"}
+    expect_exit: 2
+    expect_stderr_contains: "Minimum is 90s"
+
+  - name: block_health_poll_under_90s_for_non_active_session
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-foo-state.json
+        json: {session: "foo", spawned_at: "__NOW_ISO__"}
+      write_file_2:
+        path: /tmp/ntm-orch-bar-hook-last-poll.json
+        json: {last_poll_ms: {"bar|health": "__NOW_MS_MINUS_30000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-health=bar"}
+    expect_exit: 2
+    expect_stderr_contains: "bar|health"
+
+stop:
+  # --- No marker → allow ---
+  - name: allow_stop_no_marker
+    input: {reason: "user_requested"}
+    expect_exit: 0
+
+  # --- Corrupt marker → delete and allow ---
+  - name: allow_stop_corrupt_marker
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        text: "NOT VALID JSON {{{{"
+    input: {reason: "user_requested"}
+    expect_exit: 0
+
+  # --- Empty session field → delete and allow ---
+  - name: allow_stop_empty_session
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        json: {session: "", spawned_at: "2026-02-03T00:00:00Z"}
+    input: {reason: "user_requested"}
+    expect_exit: 0
+
+  # --- Stale marker (tmux has no such session) → reconcile and allow ---
+  - name: allow_stop_stale_marker
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-active-session.json
+        json: {session: "dead-session-xyz", spawned_at: "2026-02-03T00:00:00Z"}
+    input: {reason: "user_requested"}
+    expect_exit: 0
+
+  # NOTE: block_stop_live_session requires a live tmux session and cannot
+  # be tested in the offline harness. Verify manually:
+  #   1. ntm --robot-spawn=verify --spawn-cc=1
+  #   2. Attempt to stop orchestrator → should block with "still active"
+  #   3. ntm save verify -o ./outputs && ntm kill verify --force
+  #   4. Attempt to stop → should allow
+
+subagent_stop:
+  # --- No transcript path → allow ---
+  - name: allow_no_transcript
+    input: {}
+    expect_exit: 0
+
+  # --- No completion claim → allow ---
+  - name: allow_no_completion_claim
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Still working on the implementation. Need to refactor the auth module."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+    expect_exit: 0
+
+  # --- Completion claim without verification → block ---
+  - name: block_completion_claim_without_verification
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Task complete. Implemented the fix."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+    expect_exit: 2
+    expect_stderr_contains: "verification"
+
+  # --- Completion claim with gate evidence → allow ---
+  - name: allow_completion_with_gate_evidence
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Task complete. Ran bun run test and lint passed."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-__global__-test-transcript.jsonl
+    expect_exit: 0
