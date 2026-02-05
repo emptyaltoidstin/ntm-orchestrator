@@ -149,6 +149,7 @@ Before using in production, run the smoke tests in `tests/smoke-runs.md` against
 Trigger the skill by asking Claude Code to orchestrate agents:
 
 ```
+Tell Claude to use their ntm skill or w/e first
 "Spawn 3 agents to work on these tasks in parallel: [task list]"
 "Fan out this work across multiple agents"
 "Start an ntm session to parallelize the refactoring"
@@ -157,7 +158,7 @@ Trigger the skill by asking Claude Code to orchestrate agents:
 The orchestrator will:
 
 1. **Phase 0 - Planning**: Analyze tasks, create non-overlapping file scopes, present manifest for approval
-2. **Phase 0.5 - Validation** (optional): Run architecture discovery if codebase is unfamiliar
+2. **Phase 0.5 - Validation** (optional): Run architecture discovery if codebase is unfamiliar (this will probably fail bc it relies on another skill Claude *SHOULD* fall bac kto using task tool if available) 
 3. **Phase 1 - Spawn**: Start ntm session, register with Agent Mail, verify agent health
 4. **Phase 2 - Distribute**: Send prompts to each agent with their assigned scope
 5. **Phase 3 - Monitor**: Poll agent progress, handle interventions, detect stalls
