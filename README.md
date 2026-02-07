@@ -130,7 +130,15 @@ defaults:
 
 ### Configure temp file location
 
-The skill uses `/tmp/ntm-orch-<session>-*` for temporary files. This is standard on Linux systems included in the flywheel stack. If you need a different location, update the paths in:
+The skill uses a private runtime directory by default:
+
+```bash
+${XDG_RUNTIME_DIR:-/tmp}/ntm-orch-$(id -u)
+```
+
+Set `NTM_ORCH_RUNTIME_DIR` to override. The runtime directory is expected to be mode `0700`.
+
+If you need a different location, update the paths in:
 
 - `manifest.yaml` (`defaults.temp_file_pattern`)
 - `hooks/pre-tool-use.js` (state file functions)
@@ -149,7 +157,6 @@ Before using in production, run the smoke tests in `tests/smoke-runs.md` against
 Trigger the skill by asking Claude Code to orchestrate agents:
 
 ```
-Tell Claude to use their ntm skill or w/e first
 "Spawn 3 agents to work on these tasks in parallel: [task list]"
 "Fan out this work across multiple agents"
 "Start an ntm session to parallelize the refactoring"
@@ -158,11 +165,11 @@ Tell Claude to use their ntm skill or w/e first
 The orchestrator will:
 
 1. **Phase 0 - Planning**: Analyze tasks, create non-overlapping file scopes, present manifest for approval
-2. **Phase 0.5 - Validation** (optional): Run architecture discovery if codebase is unfamiliar (this will probably fail bc it relies on another skill Claude *SHOULD* fall bac kto using task tool if available) 
+2. **Phase 0.5 - Validation** (optional): Run architecture discovery if codebase is unfamiliar
 3. **Phase 1 - Spawn**: Start ntm session, register with Agent Mail, verify agent health
 4. **Phase 2 - Distribute**: Send prompts to each agent with their assigned scope
-5. **Phase 3 - Monitor**: Poll agent progress, handle interventions, detect stalls
-6. **Phase 4 - Collect**: Verify quality gates, capture outputs, release file reservations
+5. **Phase 3 - Monitor**: Use pane state JSON as primary progress source, poll status, handle interventions, detect stalls
+6. **Phase 4 - Collect**: Verify quality gates from state/completion evidence (tail fallback), capture outputs, release file reservations
 7. **Phase 5 - Synthesize**: Generate summary report, present results
 8. **Phase 6 - Teardown**: Kill session (after capture), clean up temp files
 
@@ -170,19 +177,14 @@ The orchestrator will:
 
 ### State file visibility
 
-The skill writes state files to `/tmp/ntm-orch-*` which are **world-readable by default** on most Linux systems. These files contain:
+The hooks write state files into a private runtime directory (mode `0700`). These files contain:
 
 - Session names
 - Timestamps (spawn time, last poll time)
 - Process IDs
 - Partial command strings (truncated)
 
-**On single-user machines**: This is not a concern.
-
-**On shared servers**: Other users on the same machine can see your session metadata. If this is sensitive:
-
-1. Set restrictive umask before running: `umask 077`
-2. Or modify the hooks to use a private temp directory
+On shared systems, verify the runtime directory owner and mode match your user.
 
 ### Fail-open design
 
@@ -265,9 +267,12 @@ If the stop hook blocks but the session is dead:
 # Verify tmux session is gone
 tmux list-sessions | grep <session-name>
 
-# If not listed, remove stale marker
-rm /tmp/ntm-orch-__global__-active-session.json
-rm /tmp/ntm-orch-<session>-state.json
+# Runtime directory used by hooks
+RUNTIME_DIR="${NTM_ORCH_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ntm-orch-$(id -u)}"
+
+# Inspect markers (exact files)
+ls -la "$RUNTIME_DIR/active-session.json"
+ls -la "$RUNTIME_DIR/<session>/state.json"
 ```
 
 ### Agent Mail not responding
