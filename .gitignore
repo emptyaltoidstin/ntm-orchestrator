@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Output directory (session captures go here during testing)
+outputs/
+
+# Temp files (these should be in /tmp, but ignore if created locally)
+*.tmp
+.*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Test artifacts
+tests/*.log
+tests/output/
