@@ -1,6 +1,6 @@
-# ntm-orchestrator v2.3 hook regression scenarios
+# ntm-orchestrator v2.4 hook regression scenarios
 
-version: 2.3.0
+version: 2.4.0
 
 pre_tool_use:
   # --- Robot-only enforcement ---
@@ -36,6 +36,23 @@ pre_tool_use:
       tool_input: {command: "ntm --help"}
     expect_exit: 0
 
+  # --- Fail-open on invalid/missing input ---
+  - name: allow_invalid_json_stdin
+    input: null
+    expect_exit: 0
+
+  - name: allow_empty_command
+    input:
+      tool_name: Bash
+      tool_input: {command: ""}
+    expect_exit: 0
+
+  - name: allow_non_ntm_bash_command
+    input:
+      tool_name: Bash
+      tool_input: {command: "ls -la /tmp"}
+    expect_exit: 0
+
   # --- bv TUI prevention ---
   - name: block_bare_bv
     input:
@@ -49,10 +66,42 @@ pre_tool_use:
       tool_input: {command: "bv plan"}
     expect_exit: 2
 
+  - name: block_bv_subcommand_triage_no_robot
+    input:
+      tool_name: Bash
+      tool_input: {command: "bv triage"}
+    expect_exit: 2
+    expect_stderr_contains: "bv without --robot"
+
   - name: allow_bv_robot_plan
     input:
       tool_name: Bash
       tool_input: {command: "bv --robot-plan"}
+    expect_exit: 0
+
+  - name: allow_bv_robot_triage
+    input:
+      tool_name: Bash
+      tool_input: {command: "bv --robot-triage"}
+    expect_exit: 0
+
+  # --- Informational flags ---
+  - name: allow_ntm_version
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --version"}
+    expect_exit: 0
+
+  - name: allow_ntm_version_subcommand
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm version"}
+    expect_exit: 0
+
+  - name: allow_ntm_help_short_flag
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm -h"}
     expect_exit: 0
 
   # --- Allowlisted subcommands ---
@@ -68,11 +117,31 @@ pre_tool_use:
       tool_input: {command: "ntm save trial01 -o ./outputs"}
     expect_exit: 0
 
+  - name: allow_ntm_kill_subcommand_syntax
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm kill somesession --force"}
+    expect_exit: 2
+    expect_stderr_contains: "without capturing output first"
+
+  # --- Mega-prompt enforcement ---
+  - name: allow_short_inline_msg
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-send=trial01 --pane=1 --msg=\"Short message here\""}
+    expect_exit: 0
+
   # --- Non-Bash tool fast path ---
   - name: allow_non_bash_tool
     input:
       tool_name: Read
       tool_input: {file_path: "/some/file.ts"}
+    expect_exit: 0
+
+  - name: allow_write_tool_fast_path
+    input:
+      tool_name: Write
+      tool_input: {file_path: "/some/file.ts", content: "hello"}
     expect_exit: 0
 
   # --- Capture-before-kill ---
@@ -100,6 +169,36 @@ pre_tool_use:
     input:
       tool_name: Bash
       tool_input: {command: "ntm kill foo --force"}
+    expect_exit: 2
+    expect_stderr_contains: "without capturing output first"
+
+  - name: block_kill_with_expired_save_marker
+    # Save marker older than 60 minutes should not satisfy capture-before-kill
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/stale01/saved.json
+        json:
+          session: "stale01"
+          saved_at: "2020-01-01T00:00:00Z"
+          save_attempted: true
+          save_succeeded: true
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm kill stale01 --force"}
+    expect_exit: 2
+    expect_stderr_contains: "without capturing output first"
+
+  - name: block_kill_with_marker_missing_save_attempted
+    # Save marker without save_attempted flag should not count
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/nosave/saved.json
+        json:
+          session: "nosave"
+          saved_at: "__NOW_ISO__"
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm kill nosave --force"}
     expect_exit: 2
     expect_stderr_contains: "without capturing output first"
 
@@ -179,6 +278,89 @@ pre_tool_use:
     expect_exit: 2
     expect_stderr_contains: "bar|health"
 
+  - name: allow_first_poll_no_prior_state
+    # First poll for a session with no prior poll file should always be allowed
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-terse=mysession"}
+    expect_exit: 0
+
+  - name: allow_poll_after_sufficient_interval
+    # Poll after >90s since last poll should be allowed
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/sess/hook-last-poll.json
+        json: {last_poll_ms: {"sess|terse": "__NOW_MS_MINUS_100000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-terse=sess"}
+    expect_exit: 0
+
+  - name: block_terse_poll_under_90s
+    # --robot-terse is subject to the same 90s minimum as other poll types
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/sess/hook-last-poll.json
+        json: {last_poll_ms: {"sess|terse": "__NOW_MS_MINUS_30000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-terse=sess"}
+    expect_exit: 2
+    expect_stderr_contains: "Minimum is 90s"
+
+  - name: block_tail_poll_under_90s
+    # --robot-tail is also subject to 90s minimum
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/sess/hook-last-poll.json
+        json: {last_poll_ms: {"sess|tail": "__NOW_MS_MINUS_10000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-tail=sess"}
+    expect_exit: 2
+    expect_stderr_contains: "Minimum is 90s"
+
+  - name: block_snapshot_poll_under_90s
+    # --robot-snapshot is also subject to 90s minimum
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/sess/hook-last-poll.json
+        json: {last_poll_ms: {"sess|snapshot": "__NOW_MS_MINUS_5000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-snapshot=sess"}
+    expect_exit: 2
+    expect_stderr_contains: "Minimum is 90s"
+
+  - name: allow_health_outside_grace_after_90s
+    # Health poll outside the 3-minute grace window still requires 90s
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/old/state.json
+        json: {session: "old", spawned_at: "2020-01-01T00:00:00Z"}
+      write_file_2:
+        path: /tmp/ntm-orch-test-runtime/old/hook-last-poll.json
+        json: {last_poll_ms: {"old|health": "__NOW_MS_MINUS_100000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-health=old"}
+    expect_exit: 0
+
+  - name: block_health_outside_grace_under_90s
+    # Health poll outside 3-minute grace window is subject to 90s, not 10s
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/old2/state.json
+        json: {session: "old2", spawned_at: "2020-01-01T00:00:00Z"}
+      write_file_2:
+        path: /tmp/ntm-orch-test-runtime/old2/hook-last-poll.json
+        json: {last_poll_ms: {"old2|health": "__NOW_MS_MINUS_30000__"}}
+    input:
+      tool_name: Bash
+      tool_input: {command: "ntm --robot-health=old2"}
+    expect_exit: 2
+    expect_stderr_contains: "Minimum is 90s"
+
 stop:
   # --- No marker → allow ---
   - name: allow_stop_no_marker
@@ -210,6 +392,11 @@ stop:
         path: /tmp/ntm-orch-test-runtime/active-session.json
         json: {session: "dead-session-xyz", spawned_at: "2026-02-03T00:00:00Z"}
     input: {reason: "user_requested"}
+    expect_exit: 0
+
+  # --- Fail-open on invalid/no stdin ---
+  - name: allow_stop_invalid_stdin
+    input: null
     expect_exit: 0
 
   # NOTE: block_stop_live_session requires a live tmux session and cannot
@@ -254,4 +441,133 @@ subagent_stop:
         text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Task complete. Ran bun run test and lint passed."}]}}'
     input:
       agent_transcript_path: /tmp/ntm-orch-test-runtime/test-transcript.jsonl
+    expect_exit: 0
+
+  # --- Fail-open edge cases ---
+  - name: allow_invalid_stdin_subagent
+    input: null
+    expect_exit: 0
+
+  - name: allow_empty_transcript_file
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/empty-transcript.jsonl
+        text: ""
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/empty-transcript.jsonl
+    expect_exit: 0
+
+  - name: allow_corrupt_jsonl_lines
+    # Transcript with non-parseable lines should fail-open gracefully
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/corrupt-transcript.jsonl
+        text: "NOT JSON AT ALL\n{broken\n{\"type\":\"user\"}"
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/corrupt-transcript.jsonl
+    expect_exit: 0
+
+  - name: allow_nonexistent_transcript_path
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/does-not-exist.jsonl
+    expect_exit: 0
+
+  # --- Multi-line transcripts: only last assistant message matters ---
+  - name: allow_completion_in_earlier_message_not_last
+    # Earlier message claims completion, but last message does not
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/multi-transcript.jsonl
+        text: "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Task complete. Implemented the fix.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Actually, still working on it. Need to refactor.\"}]}}"
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/multi-transcript.jsonl
+    expect_exit: 0
+
+  - name: block_last_message_claims_complete_no_gates
+    # Multiple messages, last one claims complete without gates
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/multi2-transcript.jsonl
+        text: "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Working on the implementation...\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"All done. Task complete.\"}]}}"
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/multi2-transcript.jsonl
+    expect_exit: 2
+    expect_stderr_contains: "verification"
+
+  # --- Verification keyword variants ---
+  - name: allow_completion_with_verified_keyword
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/verified-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Task complete. Changes verified against the spec."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/verified-transcript.jsonl
+    expect_exit: 0
+
+  - name: allow_completion_with_typecheck_keyword
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/typecheck-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Done. Ran typecheck and all clear."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/typecheck-transcript.jsonl
+    expect_exit: 0
+
+  - name: allow_completion_with_quality_gate_keyword
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/qgate-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Finished. Quality gate passed."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/qgate-transcript.jsonl
+    expect_exit: 0
+
+  - name: allow_completion_with_passes_ci
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/ci-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Ready for review. Passes CI successfully."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/ci-transcript.jsonl
+    expect_exit: 0
+
+  # --- Completion claim pattern variants ---
+  - name: block_done_claim_without_verification
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/done-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Done. Pushed the changes."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/done-transcript.jsonl
+    expect_exit: 2
+    expect_stderr_contains: "verification"
+
+  - name: block_finished_claim_without_verification
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/finished-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Finished the implementation and committed."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/finished-transcript.jsonl
+    expect_exit: 2
+    expect_stderr_contains: "verification"
+
+  - name: block_ready_for_review_without_verification
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/review-transcript.jsonl
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"Ready for review. All changes look good."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/review-transcript.jsonl
+    expect_exit: 2
+    expect_stderr_contains: "verification"
+
+  # --- User-only transcript → allow (no assistant messages) ---
+  - name: allow_transcript_with_only_user_messages
+    setup:
+      write_file:
+        path: /tmp/ntm-orch-test-runtime/user-only-transcript.jsonl
+        text: '{"type":"user","message":{"content":[{"type":"text","text":"Please fix the bug."}]}}'
+    input:
+      agent_transcript_path: /tmp/ntm-orch-test-runtime/user-only-transcript.jsonl
     expect_exit: 0
