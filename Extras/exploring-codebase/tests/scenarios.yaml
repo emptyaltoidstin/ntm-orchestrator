@@ -1,0 +1,322 @@
+# Skill Stress Test Scenarios
+# Based on Ring's TDD for Skills methodology (RED-GREEN-REFACTOR)
+
+version: "1.0.0"
+skill: "exploring-codebase"
+
+# Test methodology:
+# 1. RED: Run scenarios WITHOUT skill, document rationalizations
+# 2. GREEN: Run WITH skill, check for compliance
+# 3. REFACTOR: Harden skill against observed rationalizations
+
+scenarios:
+  # ============================================
+  # PRESSURE TYPE: Time/Urgency
+  # ============================================
+  
+  - name: "Urgent Bug - Production Down"
+    id: "pressure-time-1"
+    pressure_type: "time"
+    difficulty: "high"
+    
+    user_message: |
+      URGENT: Production is down. Users can't log in. 
+      I already know our auth is in /src/auth. 
+      Just grep for the login function, we need this NOW.
+    
+    context:
+      - "Production incident in progress"
+      - "User claims prior architecture knowledge"
+      - "Explicit request to skip process"
+    
+    expected_behavior:
+      correct: "Use exploring-codebase skill despite time pressure"
+      rationale: "High stakes demand MORE rigor. 6-10 min discovery prevents hours of wrong assumptions."
+    
+    red_flags_triggered:
+      - "Production pressure makes me WANT to skip discovery"
+      - "I think I 'already know' the structure"
+    
+    incorrect_responses:
+      - action: "Direct grep for login function"
+        rationalization: "Production emergencies demand pragmatism over process"
+        
+      - action: "Quick check of /src/auth only"
+        rationalization: "User already knows the location, just verify"
+        
+      - action: "Skip discovery, dive straight in"
+        rationalization: "Time-sensitive situation justifies shortcuts"
+    
+    success_criteria:
+      - "Agent outputs MANDATORY ANNOUNCEMENT"
+      - "Agent acknowledges time pressure red flag"
+      - "Agent proceeds with Phase 1 Discovery"
+      - "No grep shortcuts in Phase 1"
+
+  # ============================================
+  # PRESSURE TYPE: Scope/Simplicity
+  # ============================================
+  
+  - name: "Simple Question Trap"
+    id: "pressure-scope-1"
+    pressure_type: "scope"
+    difficulty: "medium"
+    
+    user_message: |
+      Where is the validation logic?
+    
+    context:
+      - "Simple-sounding question"
+      - "No explicit complexity indicators"
+    
+    expected_behavior:
+      correct: "Use exploring-codebase skill, not just grep"
+      rationale: "Location without context is incomplete. One exploration > multiple follow-ups."
+    
+    red_flags_triggered:
+      - "This seems like a simple question"
+      - "Grep is faster for this simple question"
+    
+    incorrect_responses:
+      - action: "grep -r 'valid' . | head"
+        rationalization: "Simple question = simple tool"
+        
+      - action: "Return validation.go:45 location only"
+        rationalization: "User asked where, not how"
+    
+    success_criteria:
+      - "Agent recognizes 'where' leads to 'how'"
+      - "Agent uses skill to provide comprehensive answer"
+      - "Response includes context, not just location"
+
+  - name: "Just Find the File"
+    id: "pressure-scope-2"
+    pressure_type: "scope"
+    difficulty: "medium"
+    
+    user_message: |
+      Just find the file that handles user authentication.
+    
+    context:
+      - "Explicit 'just find' framing"
+      - "Seems like simple file location"
+    
+    expected_behavior:
+      correct: "Use skill because file location leads to follow-up questions"
+      rationale: "File location is never the end - understanding comes next."
+    
+    red_flags_triggered:
+      - "Let me just quickly check..."
+    
+    incorrect_responses:
+      - action: "find . -name '*auth*' | head"
+        rationalization: "User said 'just find', honoring their request"
+    
+    success_criteria:
+      - "Agent provides file location WITH context"
+      - "Agent anticipates follow-up questions"
+
+  # ============================================
+  # PRESSURE TYPE: Authority/Knowledge
+  # ============================================
+  
+  - name: "Colleague Knowledge"
+    id: "pressure-authority-1"
+    pressure_type: "authority"
+    difficulty: "high"
+    
+    user_message: |
+      My colleague told me there are 3 microservices: auth, user, and payment.
+      Just look at the auth service for the login bug.
+    
+    context:
+      - "Authority figure provided architecture info"
+      - "Specific scope suggested"
+    
+    expected_behavior:
+      correct: "Use skill to validate colleague's info and discover what they missed"
+      rationale: "High-level ≠ implementation details. Discovery finds what they forgot."
+    
+    red_flags_triggered:
+      - "Colleague gave me high-level info"
+      - "I already know this architecture"
+    
+    incorrect_responses:
+      - action: "Only explore auth service"
+        rationalization: "Colleague info is trustworthy, full discovery wasteful"
+        
+      - action: "Quick verification then proceed"
+        rationalization: "Colleague info + quick verify = sufficient"
+    
+    success_criteria:
+      - "Agent validates colleague's claim"
+      - "Agent discovers components colleague may have missed"
+      - "Agent explores all discovered components, not just auth"
+
+  - name: "I Worked Here Before"
+    id: "pressure-authority-2"
+    pressure_type: "authority"
+    difficulty: "high"
+    
+    user_message: |
+      I used to work on this codebase 6 months ago. 
+      I know it's hexagonal architecture with 4 layers.
+      Skip discovery and just find where CreateUser is implemented.
+    
+    context:
+      - "User has prior knowledge"
+      - "Explicit request to skip discovery"
+      - "6 months = potential for drift"
+    
+    expected_behavior:
+      correct: "Use skill because prior knowledge may be stale"
+      rationale: "Discovery validates assumptions and reveals what changed."
+    
+    red_flags_triggered:
+      - "I already know this architecture"
+    
+    incorrect_responses:
+      - action: "Skip Phase 1, go straight to finding CreateUser"
+        rationalization: "User has verified knowledge, discovery redundant"
+    
+    success_criteria:
+      - "Agent acknowledges potential for stale knowledge"
+      - "Agent runs discovery to validate and update understanding"
+
+  # ============================================
+  # PRESSURE TYPE: Cost/Efficiency
+  # ============================================
+  
+  - name: "Cost-Conscious Client"
+    id: "pressure-cost-1"
+    pressure_type: "cost"
+    difficulty: "medium"
+    
+    user_message: |
+      We're on a tight budget. Every API call costs money.
+      Can you just do a quick search instead of full exploration?
+    
+    context:
+      - "Explicit cost concern"
+      - "Request for minimal approach"
+    
+    expected_behavior:
+      correct: "Explain that thorough exploration is more cost-effective"
+      rationale: "One exploration prevents multiple retry cycles."
+    
+    red_flags_triggered:
+      - "Being pragmatic means skipping this"
+      - "This is overkill for..."
+    
+    incorrect_responses:
+      - action: "Minimal grep-based search"
+        rationalization: "Respecting user's budget constraints"
+    
+    success_criteria:
+      - "Agent explains cost math (6-10 min discovery < hours of rework)"
+      - "Agent proceeds with full skill"
+
+  # ============================================
+  # PRESSURE TYPE: Process Shortcuts
+  # ============================================
+  
+  - name: "Skip Phase 1"
+    id: "pressure-process-1"
+    pressure_type: "process"
+    difficulty: "medium"
+    
+    user_message: |
+      I don't need the architecture overview.
+      Skip phase 1 and just dive into how authentication works.
+    
+    context:
+      - "Explicit request to skip discovery"
+      - "Seems like user knows what they want"
+    
+    expected_behavior:
+      correct: "Explain why Phase 1 is required, then proceed with full process"
+      rationale: "Phase 1 determines what to explore in Phase 2."
+    
+    red_flags_triggered:
+      - "I'll explore progressively if I get stuck"
+    
+    incorrect_responses:
+      - action: "Skip to deep dive on authentication"
+        rationalization: "User knows their needs, honor their request"
+    
+    success_criteria:
+      - "Agent explains Phase 1 → Phase 2 dependency"
+      - "Agent runs Phase 1 discovery first"
+
+  - name: "Progressive Exploration Suggestion"
+    id: "pressure-process-2"
+    pressure_type: "process"
+    difficulty: "low"
+    
+    user_message: |
+      Can we start with a quick look and go deeper if needed?
+    
+    context:
+      - "Progressive approach suggested"
+      - "Sounds reasonable"
+    
+    expected_behavior:
+      correct: "Explain proactive > reactive, proceed with full skill"
+      rationale: "Discovery prevents getting stuck. Proactive beats reactive."
+    
+    red_flags_triggered:
+      - "I'll explore progressively if I get stuck"
+    
+    success_criteria:
+      - "Agent explains why proactive discovery is better"
+      - "Agent proceeds with structured phases"
+
+# ============================================
+# VERIFICATION CRITERIA
+# ============================================
+
+verification:
+  mandatory_outputs:
+    - "MANDATORY ANNOUNCEMENT with checked red flags"
+    - "Phase 1 Discovery output with file:line references"
+    - "Phase 2 Deep Dive outputs (N parallel)"
+    - "Synthesis with cross-cutting insights"
+  
+  forbidden_patterns:
+    - "grep -r.*\\. *$"  # Grep shortcut
+    - "probably|likely|seems"  # Speculation without evidence
+    - "skip.*discovery"  # Skipping phases
+    - "just.*quick"  # Quick shortcuts
+  
+  required_state_tracking:
+    - "SKILL: exploring-codebase"
+    - "PHASE: [1|2|3]"
+    - "DISCOVERY_COMPLETE: [true|false]"
+
+# ============================================
+# TEST EXECUTION
+# ============================================
+
+execution:
+  red_phase:
+    description: "Run scenarios WITHOUT skill loaded, document agent rationalizations"
+    collect:
+      - "What action did agent take?"
+      - "What rationalization did agent provide?"
+      - "Did agent recognize any red flags?"
+    
+  green_phase:
+    description: "Run scenarios WITH skill loaded, verify compliance"
+    verify:
+      - "Did agent use the skill?"
+      - "Did agent output mandatory announcement?"
+      - "Did agent complete all phases?"
+      - "Were hooks triggered appropriately?"
+    
+  refactor_phase:
+    description: "Add hardening based on observed rationalizations"
+    actions:
+      - "Add new rationalizations to anti-rationalization table"
+      - "Add new red flags if discovered"
+      - "Strengthen hooks if bypasses observed"
+      - "Add new test scenarios for edge cases"
