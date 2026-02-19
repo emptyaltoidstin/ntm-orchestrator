@@ -341,4 +341,4 @@ See the Agentic Flywheel repository for license information.
 ## Version History
 
 - **1.1.0** - NTM v1.7.0+ support: preflight validation, agent health monitoring, ollama agent type, CLAUDECODE env fix, updated model versions, extras bundle
-- **1.0.0** - Initial public release as part of Agentic Flywheel
+- **1.0.0** - Initial public release as companion to Agentic Flywheel
