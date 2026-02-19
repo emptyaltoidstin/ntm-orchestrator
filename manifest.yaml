@@ -13,11 +13,12 @@ dependencies:
   required:
     - name: ntm
       purpose: "Multi-agent session management"
-      install: "cargo install ntm"
+      install: "ACFS verified installer or brew install dicklesworthstone/tap/ntm"
+      min_version: "1.7.0"
       robot_mode: true  # use --robot-* commands exclusively
     - name: br
       purpose: "Bead task tracking"
-      install: "cargo install beads_cli"
+      install: "ACFS verified installer"
     - name: agent-mail
       purpose: "Inter-agent coordination"
       type: "mcp-server"
@@ -107,7 +108,7 @@ agent_capabilities:
       - "Architecture decisions"
       - "Nuanced code review"
       - "Agent Mail coordination"
-    model_options: ["opus-4", "sonnet-4"]
+    model_options: ["opus-4.6", "sonnet-4.5"]
     context_refresh: "/clear"
   
   codex:
@@ -126,6 +127,14 @@ agent_capabilities:
       - "Large context analysis"
       - "Research tasks"
 
+  ollama:
+    alias: oll
+    strengths:
+      - "Local inference (no API cost)"
+      - "Privacy-sensitive tasks"
+      - "Rapid prototyping"
+    note: "Recognized as official agent type in NTM v1.7.0"
+
 # NTM robot mode command reference
 ntm_robot_commands:
   spawn: "ntm --robot-spawn=<session> --spawn-cc=N --spawn-cod=M --spawn-dir=/path"
@@ -142,6 +151,8 @@ ntm_robot_commands:
   interrupt: "ntm --robot-interrupt=<session> --panes=N"
   snapshot: "ntm --robot-snapshot"
   wait: "ntm --robot-wait=<session> --wait-until=idle"
+  preflight: "ntm preflight --file=/path/to/prompt.md --json"
+  agent_health: "ntm --robot-agent-health=<session> --panes=N"
 
 # Polling strategy
 polling:
@@ -190,10 +201,10 @@ defaults:
 # Capability detection
 capability_detection:
   description: |
-    NTM versions may vary. Robot mode is mandatory for this skill.
-    Use a non-destructive capability check (help text contains --robot-, and/or ntm --robot-list succeeds).
+    NTM versions may vary (minimum v1.7.0). Robot mode is mandatory for this skill.
+    Use a non-destructive capability check (help text contains --robot-, and/or ntm --robot-status succeeds).
   probe_command: |
-    ntm --help | grep -q "--robot-" && ntm --robot-list >/dev/null
+    ntm --help | grep -q "--robot-" && ntm --robot-status >/dev/null
 
 # Hooks (recommended)
 hooks:

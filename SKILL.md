@@ -55,7 +55,7 @@ RUNTIME_DIR="${NTM_ORCH_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ntm-orch-$(id -u)}
 
 | Action | Command |
 |--------|---------|
-| Spawn session | `ntm --robot-spawn=<session> --spawn-cc=N --spawn-cod=M` |
+| Spawn session | `env -u CLAUDECODE ntm --robot-spawn=<session> --spawn-cc=N --spawn-cod=M` |
 | Send prompt (file) | `ntm send <session> --pane=N --file=/path/to/prompt.md --json` |
 | Send prompt (inline) | `ntm send <session> --pane=N "short message" --json` |
 | Send with narrow immutable context (rare) | `ntm send <session> --pane=N --file=/path -c file1 -c file2 --json` |
@@ -69,6 +69,8 @@ RUNTIME_DIR="${NTM_ORCH_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ntm-orch-$(id -u)}
 | Interrupt pane | `ntm --robot-interrupt=<session> --panes=N` |
 | Snapshot (full state) | `ntm --robot-snapshot` |
 | Wait for idle | `ntm --robot-wait=<session> --wait-until=idle` |
+| Preflight prompt | `ntm preflight --file=/path/to/prompt.md --json` |
+| Agent health (detailed) | `ntm --robot-agent-health=<session> --panes=N` |
 
 See `references/ntm-commands.md` for detailed documentation.
 
@@ -269,7 +271,7 @@ If robot mode is unavailable, **do not fall back** to subcommands. Escalate to t
 register_agent({
   project_key: '<project-slug>',
   program: 'claude-code',
-  model: 'opus-4',
+  model: 'opus-4.6',
   name: 'Orchestrator',
   task_description: 'ntm session orchestrator for <session-name>'
 })
@@ -278,8 +280,10 @@ register_agent({
 ### Step 3: Spawn session
 
 ```bash
-ntm --robot-spawn=<session> --spawn-cc=<N> --spawn-cod=<M> --spawn-dir=/path/to/project
+env -u CLAUDECODE ntm --robot-spawn=<session> --spawn-cc=<N> --spawn-cod=<M> --spawn-dir=/path/to/project
 ```
+
+`env -u CLAUDECODE` is required when spawning from within a Claude Code session. CC 2.1.45+ sets `CLAUDECODE=1` in its environment; without stripping it, spawned panes inherit the var and refuse to launch a nested CC instance. This is intentional — the orchestrator is the coordinator, not a peer agent.
 
 If spawn fails, escalate (systemic failure) and stop.
 
@@ -329,7 +333,17 @@ Mid-session templates (used during monitoring and collection, not initial assign
 
 Write to `<runtime>/<session>/pane-<N>.md`.
 
-### Step 2: Send prompt
+### Step 2: Preflight validation (NTM v1.7.0+)
+
+Before sending, validate each prompt file:
+
+```bash
+ntm preflight --file=<runtime>/<session>/pane-<N>.md --json
+```
+
+Preflight checks prompt structure, length, and DCG safety. Fix any issues before sending.
+
+### Step 3: Send prompt
 
 **Use `ntm send` (not `--robot-send`)** — robot-send pastes text but doesn't submit it.
 
@@ -342,11 +356,11 @@ Use `-c` context attachments only when pointing at immutable or tiny reference f
 ntm send <session> --pane=<N> --file=<runtime>/<session>/pane-<N>.md -c docs/protocol.md --json
 ```
 
-### Step 3: Stagger sends
+### Step 4: Stagger sends
 
 Wait 2 seconds between sends to avoid thundering herd.
 
-### Step 4: Verify activation
+### Step 5: Verify activation
 
 After all prompts sent, wait 30 seconds:
 ```bash
@@ -378,7 +392,7 @@ Worker state schema:
 | 0–2 min   | No poll  | —                | —                                         |
 | 2–10 min  | 120s     | `--robot-terse`  | `--robot-status` + pane state-file reads  |
 | 10–30 min | 180s     | `--robot-terse`  | `--robot-status` + state-file anomaly triage |
-| 30+ min   | 300s     | `--robot-terse`  | `--robot-status` + `--robot-health`       |
+| 30+ min   | 300s     | `--robot-terse`  | `--robot-status` + `--robot-health` + `--robot-agent-health` |
 
 ### Each Poll Iteration
 
