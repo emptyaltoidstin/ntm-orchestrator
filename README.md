@@ -6,7 +6,7 @@ A Claude Code skill for orchestrating parallel AI agent execution via [NTM](http
 
 This skill is designed for **power users of the Agentic Flywheel system** who want to:
 
-- Fan out complex tasks across multiple AI agents (Claude Code, Codex, Gemini)
+- Fan out complex tasks across multiple AI agents (Claude Code, Codex, Gemini, Ollama)
 - Coordinate agent work through structured messaging (Agent Mail)
 - Enforce non-overlapping file scopes to prevent merge conflicts
 - Monitor agent progress with minimal token overhead
@@ -20,8 +20,8 @@ This skill is designed for **power users of the Agentic Flywheel system** who wa
 
 | Dependency | Purpose | Installation |
 |------------|---------|--------------|
-| **ntm** | Multi-agent session management | Included in ACFS wizard |
-| **br** (beads_rust) | Bead task tracking | Included in ACFS wizard |
+| **ntm** ≥ 1.7.0 | Multi-agent session management | ACFS verified installer or `brew install dicklesworthstone/tap/ntm` |
+| **br** (beads_rust) | Bead task tracking | ACFS verified installer |
 | **tmux** | Terminal multiplexer for agent panes | Included in ACFS wizard |
 | **Agent Mail** | Inter-agent coordination MCP server | Included in ACFS wizard |
 
@@ -30,7 +30,7 @@ This skill is designed for **power users of the Agentic Flywheel system** who wa
 | Dependency | Purpose | Notes |
 |------------|---------|-------|
 | **bv** (Beads Viewer) | Task intelligence and planning | Use via `ntm --robot-plan` or `bv --robot-*` only |
-| **exploring-codebase** | Architecture discovery skill | For Phase 0.5 validation |
+| **exploring-codebase** | Architecture discovery skill | For Phase 0.5 validation (bundled in `Extras/`) |
 
 ### Flywheel Installation
 
@@ -50,7 +50,7 @@ curl -sSL https://agent-flywheel.com/install | bash
 
 ```bash
 # Clone to Claude Code skills directory
-git clone <repo-url> ~/.claude/skills/ntm-orchestrator
+git clone https://github.com/emptyaltoidstin/ntm-orchestrator.git ~/.claude/skills/ntm-orchestrator
 
 # Or copy an existing directory
 cp -r /path/to/ntm-orchestrator ~/.claude/skills/ntm-orchestrator
@@ -167,11 +167,22 @@ The orchestrator will:
 1. **Phase 0 - Planning**: Analyze tasks, create non-overlapping file scopes, present manifest for approval
 2. **Phase 0.5 - Validation** (optional): Run architecture discovery if codebase is unfamiliar
 3. **Phase 1 - Spawn**: Start ntm session, register with Agent Mail, verify agent health
-4. **Phase 2 - Distribute**: Send prompts to each agent with their assigned scope
-5. **Phase 3 - Monitor**: Use pane state JSON as primary progress source, poll status, handle interventions, detect stalls
+4. **Phase 2 - Distribute**: Preflight-validate prompts (v1.7.0+), send to each agent with their assigned scope
+5. **Phase 3 - Monitor**: Use pane state JSON as primary progress source, poll status, handle interventions, detect stalls. Long sessions (30+ min) additionally use `--robot-agent-health` for detailed cost/context tracking
 6. **Phase 4 - Collect**: Verify quality gates from state/completion evidence (tail fallback), capture outputs, release file reservations
 7. **Phase 5 - Synthesize**: Generate summary report, present results
 8. **Phase 6 - Teardown**: Kill session (after capture), clean up temp files
+
+## Supported Agent Types
+
+| Agent | Alias | Best For |
+|-------|-------|----------|
+| Claude Code | `cc` | Complex multi-file refactoring, architecture decisions, nuanced code review |
+| Codex | `cod` | Fast code generation, test writing, documentation |
+| Gemini | `gmi` | Documentation review, large context analysis, research tasks |
+| Ollama | `oll` | Local inference (no API cost), privacy-sensitive tasks, rapid prototyping |
+
+Default agent mix: `--spawn-cc=7 --spawn-cod=3`. Adjust based on task count and complexity.
 
 ## Security Considerations
 
@@ -192,6 +203,10 @@ The hooks use a **fail-open** pattern: if JSON parsing fails or an unexpected er
 
 If you need stricter enforcement, modify the `failOpen()` functions in the hooks to `process.exit(2)` instead.
 
+### Capture-before-kill enforcement
+
+The `pre-tool-use` hook enforces that `ntm save <session>` must be run before `ntm kill <session>`. This converts "should save" into "cannot skip save" — even under user pressure to abort immediately. See `hooks/README.md` for the design rationale.
+
 ### Session name sanitization
 
 Session names are sanitized via `safeSession()` which strips non-alphanumeric characters. However, session names flow through to:
@@ -211,6 +226,10 @@ The skill assumes all agents in a session are trusted collaborators. Agents can:
 - Send messages to any registered agent
 
 Do not use this skill for adversarial multi-agent scenarios.
+
+### CLAUDECODE environment variable
+
+When spawning from within a Claude Code session, the spawn command uses `env -u CLAUDECODE` to unset the `CLAUDECODE` environment variable. Claude Code 2.1.45+ sets `CLAUDECODE=1` in its environment; without stripping it, spawned panes inherit the variable and refuse to launch nested CC instances.
 
 ## Directory Structure
 
@@ -235,6 +254,19 @@ ntm-orchestrator/
 │   └── polling-cadence.md
 ├── palette/              # Quick-reference task snippets
 ├── references/           # Documentation for ntm, br, agent-mail
+│   └── ntm-commands.md   # Full NTM robot mode command reference
+├── Extras/               # Supplementary resources
+│   ├── AGENTS-TEMPLATE.md           # Template for project AGENTS.md files
+│   ├── bead-polish-ntm-prompts.md   # Prompt polish bead template
+│   ├── high-quality-bead-template.md # Bead authoring template
+│   └── exploring-codebase/          # Architecture discovery skill
+│       ├── SKILL.md
+│       ├── manifest.yaml
+│       ├── agents/
+│       ├── hooks/
+│       ├── patterns/
+│       ├── templates/
+│       └── tests/
 └── tests/
     ├── smoke-runs.md     # End-to-end test scenarios
     ├── scenarios.yaml    # Hook unit test scenarios
@@ -245,9 +277,16 @@ ntm-orchestrator/
 
 ### "Robot mode not available"
 
-Update ntm to a version that includes robot mode:
+Update ntm to v1.7.0+ which includes robot mode:
 
 ```bash
+# Via ACFS
+curl -sSL https://agent-flywheel.com/install | bash
+
+# Or via Homebrew
+brew install dicklesworthstone/tap/ntm
+
+# Or via Cargo
 cargo install ntm --force
 ```
 
@@ -258,6 +297,7 @@ Check the specific block message. Common causes:
 - **Polling too fast**: Wait 90 seconds between status checks
 - **Kill without capture**: Run `ntm save <session>` before killing
 - **Bare bv command**: Use `ntm --robot-plan` or `bv --robot-*` flags
+- **Missing preflight**: Use `ntm preflight --file=... --json` before `ntm send`
 
 ### Session marker is stale
 
@@ -291,8 +331,8 @@ curl http://localhost:<port>/health
 
 This skill is part of the Agentic Flywheel system. For issues and contributions:
 
-- Flywheel repository: https://github.com/Dicklesworthstone
-- Installation guide: https://agent-flywheel.com/tldr
+- Flywheel repository: <https://github.com/Dicklesworthstone>
+- Installation guide: <https://agent-flywheel.com/tldr>
 
 ## License
 
@@ -300,4 +340,5 @@ See the Agentic Flywheel repository for license information.
 
 ## Version History
 
+- **1.1.0** - NTM v1.7.0+ support: preflight validation, agent health monitoring, ollama agent type, CLAUDECODE env fix, updated model versions, extras bundle
 - **1.0.0** - Initial public release as part of Agentic Flywheel
