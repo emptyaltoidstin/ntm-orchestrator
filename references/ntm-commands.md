@@ -140,13 +140,13 @@ ntm --robot-health=<session>
 
 **Returns:** JSON health report — agent states, error counts, memory usage, restarts.
 
-### Agent Health (with provider usage)
+### Agent Health (with provider usage — NTM v1.7.0+)
 
 ```bash
 ntm --robot-agent-health=<session> --panes=2,3
 ```
 
-Comprehensive health check combining local state and provider usage data.
+Comprehensive health check combining local state and provider usage data. Includes token count, context usage metrics, and cost estimates per agent.
 
 ### Session Snapshot
 
@@ -215,6 +215,24 @@ ntm --robot-plan
 **Returns:** Parallelizable execution tracks from bv integration.
 
 **⚠️ Important:** The plan is **advisory input**. The orchestrator is responsible for assigning and enforcing non-overlapping file scopes. Never assume the plan guarantees non-overlap.
+
+---
+
+## Prompt Validation (NTM v1.7.0+)
+
+### Preflight Check
+
+```bash
+ntm preflight --file=/path/to/prompt.md --json
+```
+
+Validates a prompt file before sending. Checks structure, length, and runs DCG safety analysis. Use in Phase 2 before `ntm send` to catch issues early.
+
+| Flag | Description |
+|------|-------------|
+| `--file=/path` | Prompt file to validate |
+| `--json` | JSON output |
+| `--strict` | Fail on warnings (not just errors) |
 
 ---
 
