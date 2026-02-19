@@ -93,7 +93,7 @@ Add to your Claude Code hooks configuration (`~/.claude/settings.json`):
 ### Purpose
 
 Blocks:
-- Any **NTM subcommand** invocation (orchestrator must use robot mode; `send`, `kill`, `save` exempted)
+- Any **NTM subcommand** invocation (orchestrator must use robot mode; `send`, `kill`, `save`, `preflight` exempted)
 - `bv` without `--robot-*` (including bare `bv`)
 - Inline `--msg=` longer than 2000 chars (forces `--msg-file` or `--file`)
 - Polling faster than 90 seconds for: `--robot-terse/status/tail/health/snapshot`

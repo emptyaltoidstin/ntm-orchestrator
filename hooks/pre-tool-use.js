@@ -184,8 +184,9 @@ if (/\bntm\b/.test(cmd)) {
   const allowSend = /\bntm\b\s+send\b/.test(cmd);
   const allowKill = /\bntm\b\s+kill\b/.test(cmd);
   const allowSave = /\bntm\b\s+save\b/.test(cmd);
+  const allowPreflight = /\bntm\b\s+preflight\b/.test(cmd);
 
-  if (!hasRobot && !allowInfo && !allowSend && !allowKill && !allowSave) {
+  if (!hasRobot && !allowInfo && !allowSend && !allowKill && !allowSave && !allowPreflight) {
     block('Non-robot ntm invocations are disallowed for orchestration. Use robot mode or one of the allowed subcommands (send, kill, save).');
   }
 }
