@@ -21,151 +21,42 @@
  */
 
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const { execFileSync } = require('child_process');
+const lib = require('./lib');
 
 // Skip for NTM-spawned agents — these hooks are for the orchestrator only.
-// NTM sets pane titles like "session__cc_1" or "session__cod_2".
-const tmuxPane = process.env.TMUX_PANE;
-if (tmuxPane && process.env.TMUX) {
-  try {
-    const title = execFileSync(
-      '/usr/bin/tmux',
-      ['display-message', '-t', tmuxPane, '-p', '#{pane_title}'],
-      { encoding: 'utf8', timeout: 2000 }
-    ).trim();
-    if (/__(?:cc|cod|gem)_\d+$/.test(title)) {
-      process.exit(0);
-    }
-  } catch {
-    // fail-open: can't determine pane title, continue with checks
-  }
-}
+if (lib.isSpawnedAgent()) process.exit(0);
 
-function failOpen() {
-  process.exit(0);
-}
-
-let input;
-try {
-  input = JSON.parse(fs.readFileSync(0, 'utf8'));
-} catch {
-  failOpen();
-}
+const input = lib.readStdinJSON();
+if (!input) lib.failOpen();
 
 const toolName = input.tool_name || '';
 const toolInput = input.tool_input || {};
-if (toolName !== 'Bash') failOpen();
+if (toolName !== 'Bash') lib.failOpen();
 
 const cmd = String(toolInput.command || '');
-if (!cmd.trim()) failOpen();
-
-const UID = typeof process.getuid === 'function' ? String(process.getuid()) : 'unknown';
-const DEFAULT_RUNTIME_DIR = path.resolve(path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), `ntm-orch-${UID}`));
-const RUNTIME_DIR = path.resolve(process.env.NTM_ORCH_RUNTIME_DIR || DEFAULT_RUNTIME_DIR);
-
-function safeSession(s) {
-  const raw = String(s || '').trim();
-  if (!raw) return '';
-  return raw.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 128);
-}
-
-function isInsideRuntime(candidatePath) {
-  const abs = path.resolve(candidatePath);
-  return abs === RUNTIME_DIR || abs.startsWith(`${RUNTIME_DIR}${path.sep}`);
-}
-
-function ensureSecureDir(dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
-  let st = fs.lstatSync(dirPath);
-  if (!st.isDirectory() || st.isSymbolicLink()) {
-    throw new Error(`Runtime path is not a real directory: ${dirPath}`);
-  }
-  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
-    throw new Error(`Runtime path not owned by current user: ${dirPath}`);
-  }
-  if ((st.mode & 0o077) !== 0) {
-    fs.chmodSync(dirPath, 0o700);
-    st = fs.lstatSync(dirPath);
-    if ((st.mode & 0o077) !== 0) {
-      throw new Error(`Runtime path must be mode 0700: ${dirPath}`);
-    }
-  }
-}
-
-function ensureRuntimeDir() {
-  ensureSecureDir(RUNTIME_DIR);
-}
-
-function sessionDir(session) {
-  return path.join(RUNTIME_DIR, safeSession(session));
-}
-
-function stateFile(session) {
-  return path.join(sessionDir(session), 'state.json');
-}
-
-function lastPollFile(session) {
-  return path.join(sessionDir(session), 'hook-last-poll.json');
-}
-
-const GLOBAL_INDEX = path.join(RUNTIME_DIR, 'active-session.json');
-
-function block(message) {
-  process.stderr.write(`BLOCKED: ${message}\n`);
-  process.exit(2);
-}
-
-function safeDeleteOwnedFile(filePath) {
-  const target = path.resolve(filePath);
-  if (!isInsideRuntime(target)) {
-    throw new Error(`Refusing to delete path outside runtime dir: ${target}`);
-  }
-  let st;
-  try {
-    st = fs.lstatSync(target);
-  } catch {
-    return;
-  }
-  if (st.isDirectory() || st.isSymbolicLink()) {
-    throw new Error(`Refusing to delete non-regular file: ${target}`);
-  }
-  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
-    throw new Error(`Refusing to delete file not owned by current user: ${target}`);
-  }
-  fs.unlinkSync(target);
-}
-
-// Atomic write: write to temp file in same directory, then rename.
-// rename(2) on the same filesystem is atomic on Linux.
-function writeAtomic(filePath, data) {
-  const dir = path.dirname(filePath);
-  if (!isInsideRuntime(filePath)) {
-    throw new Error(`Refusing to write outside runtime dir: ${filePath}`);
-  }
-  ensureSecureDir(dir);
-  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, data, 'utf8');
-  fs.renameSync(tmp, filePath);
-}
+if (!cmd.trim()) lib.failOpen();
 
 // -------------------------
 // 1) Block bv TUI
 // -------------------------
 if (/^\s*bv\s*$/.test(cmd)) {
-  block('Bare bv launches TUI and blocks. Use: ntm --robot-plan or bv --robot-<...>.');
+  lib.block('Bare bv launches TUI and blocks. Use: ntm --robot-plan or bv --robot-<...>.');
 }
 if (/\bbv\b/.test(cmd) && !/\bbv\b[^\n]*--robot-/.test(cmd)) {
-  block('bv without --robot-* may launch TUI. Use: bv --robot-triage / bv --robot-plan, or prefer ntm --robot-plan.');
+  lib.block(
+    'bv without --robot-* may launch TUI and block.\n' +
+    '\nPreferred: ntm --robot-plan\n' +
+    'Alternatives: bv --robot-triage, bv --robot-plan'
+  );
 }
 
 if (/\bntm\b/.test(cmd)) {
   try {
-    ensureRuntimeDir();
+    lib.ensureRuntimeDir();
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unable to initialize runtime directory';
-    block(`Runtime directory is not secure: ${msg}`);
+    lib.block(`Runtime directory is not secure: ${msg}`);
   }
 }
 
@@ -187,7 +78,14 @@ if (/\bntm\b/.test(cmd)) {
   const allowPreflight = /\bntm\b\s+preflight\b/.test(cmd);
 
   if (!hasRobot && !allowInfo && !allowSend && !allowKill && !allowSave && !allowPreflight) {
-    block('Non-robot ntm invocations are disallowed for orchestration. Use robot mode or one of the allowed subcommands (send, kill, save).');
+    lib.block(
+      'Non-robot ntm invocations are disallowed for orchestration.\n' +
+      '\nUse robot mode equivalents:\n' +
+      '  ntm status  →  ntm --robot-status\n' +
+      '  ntm health  →  ntm --robot-health=<session>\n' +
+      '  ntm spawn   →  ntm --robot-spawn=<session>\n' +
+      '\nAllowed subcommands (no robot equivalent): ntm send, ntm kill, ntm save, ntm preflight'
+    );
   }
 }
 
@@ -196,29 +94,29 @@ if (/\bntm\b/.test(cmd)) {
 // -------------------------
 const spawnMatch = cmd.match(/\bntm\b\s+--robot-spawn=([^\s]+)/);
 if (spawnMatch) {
-  const session = safeSession(spawnMatch[1]);
+  const session = lib.safeSession(spawnMatch[1]);
   if (!session) {
-    block('Invalid empty session name for --robot-spawn.');
+    lib.block('Invalid empty session name for --robot-spawn.');
   }
   try {
-    ensureSecureDir(sessionDir(session));
+    lib.ensureSecureDir(lib.sessionDir(session));
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unable to create session directory';
-    block(`Session runtime path is not secure: ${msg}`);
+    lib.block(`Session runtime path is not secure: ${msg}`);
   }
 
   // Prevent silent orphaning: if the global index points to a different live session, block.
   try {
-    const existing = JSON.parse(fs.readFileSync(GLOBAL_INDEX, 'utf8'));
+    const existing = JSON.parse(fs.readFileSync(lib.GLOBAL_INDEX, 'utf8'));
     if (existing?.session && existing.session !== session) {
       try {
-        execFileSync('/usr/bin/tmux', ['has-session', '-t', existing.session], { stdio: 'ignore', timeout: 2000 });
+        execFileSync(lib.TMUX_PATH, ['has-session', '-t', existing.session], { stdio: 'ignore', timeout: 2000 });
         // Session is still alive — block the new spawn.
-        block(`Another NTM session is already active (${existing.session}). Capture and kill it before spawning a new one.`);
+        lib.block(`Another NTM session is already active (${existing.session}). Capture and kill it before spawning a new one.`);
       } catch {
         // Existing session is dead — stale index, safe to overwrite.
-        try { safeDeleteOwnedFile(GLOBAL_INDEX); } catch {}
-        try { safeDeleteOwnedFile(stateFile(existing.session)); } catch {}
+        try { lib.safeDeleteOwnedFile(lib.GLOBAL_INDEX); } catch {}
+        try { lib.safeDeleteOwnedFile(lib.stateFile(existing.session)); } catch {}
       }
     }
   } catch {
@@ -227,8 +125,8 @@ if (spawnMatch) {
 
   // Write session-scoped state file (atomic).
   try {
-    writeAtomic(
-      stateFile(session),
+    lib.writeAtomic(
+      lib.stateFile(session),
       JSON.stringify({ session, spawned_at: new Date().toISOString(), pid: process.pid }, null, 2)
     );
   } catch {
@@ -237,8 +135,8 @@ if (spawnMatch) {
 
   // Write global index for stop.js discovery (atomic).
   try {
-    writeAtomic(
-      GLOBAL_INDEX,
+    lib.writeAtomic(
+      lib.GLOBAL_INDEX,
       JSON.stringify({ session }, null, 2)
     );
   } catch {
@@ -250,12 +148,15 @@ if (spawnMatch) {
 // 4) Enforce no inline mega-prompts
 // -------------------------
 // Check both --msg (robot-send) and inline prompts for ntm send
-const msgMatch = cmd.match(/--msg=("([\s\S]*?)"|'([\s\S]*?)')/);
-if (msgMatch) {
-  const msg = msgMatch[2] ?? msgMatch[3] ?? '';
-  if (msg.length > 2000) {
-    block(`Inline --msg exceeds 2000 chars. Write to ${RUNTIME_DIR}/<session>/pane-<N>.md and send with --msg-file (robot) or --file (ntm send).`);
-  }
+function extractInlineMsg(command) {
+  const match = command.match(/--msg(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s]+))/);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? '';
+}
+
+const inlineMsg = extractInlineMsg(cmd);
+if (inlineMsg && inlineMsg.length > lib.MAX_INLINE_MSG_CHARS) {
+  lib.block(`Inline --msg exceeds ${lib.MAX_INLINE_MSG_CHARS} chars. Write to ${lib.RUNTIME_DIR}/<session>/pane-<N>.md and send with --msg-file (robot) or --file (ntm send).`);
 }
 
 // -------------------------
@@ -270,23 +171,23 @@ if (pollMatch) {
   const key = `${session}|${pollType}`;
 
   const now = Date.now();
-  let minIntervalSec = 90;
+  let minIntervalSec = lib.MIN_POLL_INTERVAL_SEC;
 
   // Grace window: allow 10s health retries for the *active* session within 3 minutes of spawn.
   if (pollType === 'health' && session !== '__global__') {
     try {
-      const sessionState = JSON.parse(fs.readFileSync(stateFile(session), 'utf8'));
+      const sessionState = JSON.parse(fs.readFileSync(lib.stateFile(session), 'utf8'));
       const spawnedAtMs = Date.parse(sessionState?.spawned_at || '');
-      const withinGrace = !Number.isNaN(spawnedAtMs) && (now - spawnedAtMs) <= 180_000;
+      const withinGrace = !Number.isNaN(spawnedAtMs) && (now - spawnedAtMs) <= lib.HEALTH_GRACE_WINDOW_MS;
       if (withinGrace) {
-        minIntervalSec = 10;
+        minIntervalSec = lib.HEALTH_GRACE_INTERVAL_SEC;
       }
     } catch {
       // fail-open
     }
   }
 
-  const pollFile = lastPollFile(session);
+  const pollFile = lib.lastPollFile(session);
   let state = { last_poll_ms: {} };
   try {
     state = JSON.parse(fs.readFileSync(pollFile, 'utf8')) || state;
@@ -299,12 +200,12 @@ if (pollMatch) {
   const last = Number(state.last_poll_ms[key] || 0);
   const deltaSec = (now - last) / 1000;
   if (last > 0 && deltaSec < minIntervalSec) {
-    block(`Polling too fast for ${key} (${deltaSec.toFixed(1)}s). Minimum is ${minIntervalSec}s.`);
+    lib.block(`Polling too fast for ${key} (${deltaSec.toFixed(1)}s). Minimum is ${minIntervalSec}s.`);
   }
 
   state.last_poll_ms[key] = now;
   try {
-    writeAtomic(pollFile, JSON.stringify(state, null, 2));
+    lib.writeAtomic(pollFile, JSON.stringify(state, null, 2));
   } catch {
     // ignore
   }
@@ -315,26 +216,22 @@ if (pollMatch) {
 // -------------------------
 // When ntm save <session> is executed, write a marker file that the kill check uses.
 // This is more reliable than checking for output files in arbitrary directories.
-function saveMarkerFile(session) {
-  return path.join(sessionDir(session), 'saved.json');
-}
-
 const saveMatch = cmd.match(/\bntm\b\s+save\s+([^\s]+)/);
 if (saveMatch) {
-  const session = safeSession(saveMatch[1]);
+  const session = lib.safeSession(saveMatch[1]);
   if (!session) {
-    block('Invalid empty session name for ntm save.');
+    lib.block('Invalid empty session name for ntm save.');
   }
   try {
-    ensureSecureDir(sessionDir(session));
+    lib.ensureSecureDir(lib.sessionDir(session));
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unable to create session directory';
-    block(`Session runtime path is not secure: ${msg}`);
+    lib.block(`Session runtime path is not secure: ${msg}`);
   }
   // Write save marker (atomic) — includes metadata for debugging
   try {
-    writeAtomic(
-      saveMarkerFile(session),
+    lib.writeAtomic(
+      lib.saveMarkerFile(session),
       JSON.stringify({
         session,
         saved_at: new Date().toISOString(),
@@ -356,21 +253,20 @@ if (saveMatch) {
 // This converts "policy" into "cannot violate" — even under interrupt pressure.
 const killMatch = cmd.match(/\bntm\b\s+kill\s+([^\s]+)/);
 if (killMatch) {
-  const session = safeSession(killMatch[1]);
+  const session = lib.safeSession(killMatch[1]);
   if (!session) {
-    block('Invalid empty session name for ntm kill.');
+    lib.block('Invalid empty session name for ntm kill.');
   }
-  const markerPath = saveMarkerFile(session);
+  const markerPath = lib.saveMarkerFile(session);
 
   // Primary check: explicit save marker (written by section 6 above)
   let hasMarker = false;
-  let markerData = null;
   try {
-    markerData = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    const markerData = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
     const savedAt = Date.parse(markerData?.saved_at || '');
     const ageMin = (Date.now() - savedAt) / 60000;
-    // Marker must be recent (within 60 minutes) and indicate save was attempted
-    if (!Number.isNaN(savedAt) && ageMin <= 60 && markerData?.save_attempted) {
+    // Marker must be recent (within SAVE_MARKER_TTL_MIN) and indicate save was attempted
+    if (!Number.isNaN(savedAt) && ageMin <= lib.SAVE_MARKER_TTL_MIN && markerData?.save_attempted) {
       hasMarker = true;
     }
   } catch {
@@ -378,7 +274,7 @@ if (killMatch) {
   }
 
   if (!hasMarker) {
-    block(
+    lib.block(
       `Cannot kill session '${session}' without capturing output first.\n` +
       `\n` +
       `Run this command first:\n` +
@@ -389,15 +285,15 @@ if (killMatch) {
   }
 
   // Deterministic cleanup: delete session-scoped state, poll, and save marker files.
-  try { safeDeleteOwnedFile(stateFile(session)); } catch {}
-  try { safeDeleteOwnedFile(lastPollFile(session)); } catch {}
-  try { safeDeleteOwnedFile(markerPath); } catch {}
+  try { lib.safeDeleteOwnedFile(lib.stateFile(session)); } catch {}
+  try { lib.safeDeleteOwnedFile(lib.lastPollFile(session)); } catch {}
+  try { lib.safeDeleteOwnedFile(markerPath); } catch {}
 
   // Clear global index if it points to this session.
   try {
-    const idx = JSON.parse(fs.readFileSync(GLOBAL_INDEX, 'utf8'));
+    const idx = JSON.parse(fs.readFileSync(lib.GLOBAL_INDEX, 'utf8'));
     if (idx && idx.session === session) {
-      safeDeleteOwnedFile(GLOBAL_INDEX);
+      lib.safeDeleteOwnedFile(lib.GLOBAL_INDEX);
     }
   } catch {
     // ignore

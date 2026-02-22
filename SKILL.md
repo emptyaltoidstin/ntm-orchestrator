@@ -1,6 +1,6 @@
 ---
 name: ntm-orchestrator
-version: 1.0.0
+version: 1.1.0
 description: |
   Spawn and orchestrate an ntm multi-agent session from within Claude Code.
   Plans work distribution, sends targeted prompts, monitors progress via

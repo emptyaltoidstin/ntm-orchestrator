@@ -165,6 +165,37 @@ pre_tool_use:
     expect_exit: 2
     expect_stderr_contains: "Minimum is 90s"
 
+  # --- Inline mega-prompt enforcement ---
+  - name: block_inline_msg_over_2000_chars
+    input:
+      tool_name: Bash
+      tool_input:
+        command: "ntm --robot-send=foo --pane=1 --msg=\"__REPEAT_CHAR_A_2001__\""
+    expect_exit: 2
+    expect_stderr_contains: "exceeds 2000 chars"
+
+  - name: allow_inline_msg_under_2000_chars
+    input:
+      tool_name: Bash
+      tool_input:
+        command: "ntm --robot-send=foo --pane=1 --msg=\"short prompt\""
+    expect_exit: 0
+
+  - name: block_inline_msg_over_2000_chars_space_arg
+    input:
+      tool_name: Bash
+      tool_input:
+        command: "ntm --robot-send=foo --pane=1 --msg __REPEAT_CHAR_A_2001__"
+    expect_exit: 2
+    expect_stderr_contains: "exceeds 2000 chars"
+
+  - name: allow_inline_msg_under_2000_chars_space_arg
+    input:
+      tool_name: Bash
+      tool_input:
+        command: "ntm --robot-send=foo --pane=1 --msg short"
+    expect_exit: 0
+
   - name: block_health_poll_under_90s_for_non_active_session
     setup:
       write_file:

@@ -18,6 +18,7 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+.claude/settings.local.json
 
 # Test artifacts
 tests/*.log

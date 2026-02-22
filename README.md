@@ -72,25 +72,49 @@ Add to your Claude Code settings (`~/.claude/settings.json` or project `.claude/
   "hooks": {
     "PreToolUse": [
       {
-        "command": "node ~/.claude/skills/ntm-orchestrator/hooks/pre-tool-use.js",
-        "timeout": 5000
-      }
-    ],
-    "Stop": [
-      {
-        "command": "node ~/.claude/skills/ntm-orchestrator/hooks/stop.js",
-        "timeout": 5000
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/ntm-orchestrator/hooks/pre-tool-use.js",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStop": [
       {
-        "command": "node ~/.claude/skills/ntm-orchestrator/hooks/subagent-stop.js",
-        "timeout": 5000
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/ntm-orchestrator/hooks/subagent-stop.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/ntm-orchestrator/hooks/stop.js",
+            "timeout": 5
+          }
+        ]
       }
     ]
   }
 }
 ```
+
+**Notes:**
+- `timeout` is in seconds (not milliseconds)
+- `Stop` has no matcher support (always fires)
+- `SubagentStop` matcher `""` matches all agent types
+- `PreToolUse` matcher `"Bash"` ensures the hook only fires for Bash tool calls
+- If you have existing PreToolUse hooks (e.g., `dcg`), add the ntm hook as an additional entry in the same `hooks` array — they run in parallel
 
 ### 4. Verify Agent Mail MCP server is running
 

@@ -46,12 +46,16 @@ function materializeNowMacros(value) {
   // - "__NOW_ISO__" -> current ISO timestamp
   // - "__NOW_MS__" -> Date.now() (number)
   // - "__NOW_MS_MINUS_<n>__" -> Date.now() - n (number)
+  // - "__REPEAT_CHAR_<c>_<n>__" -> character c repeated n times
   if (typeof value === 'string') {
     if (value === '__NOW_ISO__') return new Date().toISOString();
     if (value === '__NOW_MS__') return Date.now();
     const m = value.match(/^__NOW_MS_MINUS_(\d+)__$/);
     if (m) return Date.now() - Number(m[1]);
-    return value;
+    const repeatMatch = value.match(/^__REPEAT_CHAR_(\w)_(\d+)__$/);
+    if (repeatMatch) return repeatMatch[1].repeat(Number(repeatMatch[2]));
+    // Also support inline repeat macros within larger strings
+    return value.replace(/__REPEAT_CHAR_(\w)_(\d+)__/g, (_match, char, count) => char.repeat(Number(count)));
   }
   if (Array.isArray(value)) return value.map(materializeNowMacros);
   if (value && typeof value === 'object') {
@@ -73,6 +77,28 @@ function writeText(filePath, text) {
   fs.writeFileSync(filePath, String(text), 'utf8');
 }
 
+// Normalize hardcoded /tmp/ntm-orch-test-runtime paths for cross-platform compatibility.
+// On Linux os.tmpdir() === '/tmp' so the YAML paths work as-is; on Windows/macOS they diverge.
+const YAML_RUNTIME_PREFIX = '/tmp/ntm-orch-test-runtime';
+function resolveTestPath(p) {
+  if (p.startsWith(YAML_RUNTIME_PREFIX)) {
+    return path.join(TEST_RUNTIME_DIR, p.slice(YAML_RUNTIME_PREFIX.length));
+  }
+  return p;
+}
+
+// Recursively resolve /tmp/ntm-orch-test-runtime paths in input objects
+function resolveTestPaths(value) {
+  if (typeof value === 'string') return resolveTestPath(value);
+  if (Array.isArray(value)) return value.map(resolveTestPaths);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = resolveTestPaths(v);
+    return out;
+  }
+  return value;
+}
+
 function applySetup(setup) {
   if (!setup || typeof setup !== 'object') return;
 
@@ -82,12 +108,14 @@ function applySetup(setup) {
     if (!spec || typeof spec !== 'object') continue;
     if (!spec.path || typeof spec.path !== 'string') continue;
 
+    const resolvedPath = resolveTestPath(spec.path);
+
     if (spec.json !== undefined) {
-      writeJson(spec.path, spec.json);
+      writeJson(resolvedPath, spec.json);
       continue;
     }
     if (spec.text !== undefined) {
-      writeText(spec.path, spec.text);
+      writeText(resolvedPath, spec.text);
       continue;
     }
   }
@@ -146,7 +174,8 @@ function main() {
       resetTmpState();
       applySetup(sc.setup);
 
-      const { code, stderr } = runHook(hookPath, sc.input);
+      const expandedInput = resolveTestPaths(materializeNowMacros(sc.input));
+      const { code, stderr } = runHook(hookPath, expandedInput);
 
       const expectedCode = Number(sc.expect_exit);
       const okCode = code === expectedCode;

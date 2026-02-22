@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ntm-orchestrator SubagentStop Hook (v1.0.0)
+ * ntm-orchestrator SubagentStop Hook (v1.1.0)
  *
  * Lightweight completion-evidence check for subagents.
  *
@@ -17,43 +17,18 @@
  */
 
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const lib = require('./lib');
 
 // Skip for NTM-spawned agents — these hooks are for the orchestrator only.
-// NTM sets pane titles like "session__cc_1" or "session__cod_2".
-const tmuxPane = process.env.TMUX_PANE;
-if (tmuxPane && process.env.TMUX) {
-  try {
-    const title = execFileSync(
-      '/usr/bin/tmux',
-      ['display-message', '-t', tmuxPane, '-p', '#{pane_title}'],
-      { encoding: 'utf8', timeout: 2000 }
-    ).trim();
-    if (/__(?:cc|cod|gem)_\d+$/.test(title)) {
-      process.exit(0);
-    }
-  } catch {
-    // fail-open: can't determine pane title, continue with checks
-  }
-}
+if (lib.isSpawnedAgent()) process.exit(0);
 
-function allow() { process.exit(0); }
-function block(msg) {
-  process.stderr.write(`BLOCKED: ${msg}\n`);
-  process.exit(2);
-}
-
-let input;
-try {
-  input = JSON.parse(fs.readFileSync(0, 'utf8'));
-} catch {
-  allow();
-}
+const input = lib.readStdinJSON();
+if (!input) lib.allow();
 
 // Extract the last assistant message text from the transcript JSONL
 const transcriptPath = input?.agent_transcript_path;
 if (!transcriptPath) {
-  allow();
+  lib.allow();
 }
 
 let text = '';
@@ -76,26 +51,26 @@ try {
   }
 } catch {
   // Can't read transcript -> fail-open
-  allow();
+  lib.allow();
 }
 
 if (!text) {
-  allow();
+  lib.allow();
 }
 
 const claimsComplete = /(task\s+complete|completed|done|finished|all\s+set|ready\s+for\s+review)/.test(text);
 if (!claimsComplete) {
-  allow();
+  lib.allow();
 }
 
 const mentionsGates = /(typecheck|lint|unit\s+test|tests?\s+pass|bun\s+run\s+(typecheck|lint|test)|quality\s+gate)/.test(text);
 const mentionsVerification = /(verified|verification|reproduced|validated|passes\s+ci|green)/.test(text);
 
 if (!mentionsGates && !mentionsVerification) {
-  block(
+  lib.block(
     'Subagent appears to claim completion without evidence of verification/quality gates. ' +
     'Require explicit gate results (typecheck/lint/test) or verification notes before accepting completion.'
   );
 }
 
-allow();
+lib.allow();
