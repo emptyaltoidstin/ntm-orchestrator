@@ -1,6 +1,5 @@
 ---
 name: deep-dive-agent
-version: 1.0.0
 description: "Deep exploration of specific component/layer for target understanding"
 role: "phase-2"
 model: sonnet

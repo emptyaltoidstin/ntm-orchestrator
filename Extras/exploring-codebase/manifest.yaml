@@ -1,60 +1,32 @@
 # Exploring Codebase Skill - Machine-Readable Manifest
-# Version: 1.0.0
 
 name: "exploring-codebase"
-version: "1.0.0"
 description: |
-  Autonomous two-phase codebase exploration - first discovers natural perspectives
-  (layers, components, boundaries), then dispatches adaptive deep-dive explorers
-  based on what was discovered. Synthesizes findings into actionable insights.
+  Systematic codebase exploration that maps architecture, components, and dependencies.
+  Use when you need to understand how a feature works across a codebase, explore an
+  unfamiliar project's architecture, trace data flow through multiple layers, or plan
+  changes that span several components. Maps the high-level structure first, then
+  dispatches parallel agents to explore each area in depth. Produces a synthesis with
+  file:line references, execution flows, and actionable recommendations.
 
 # When to trigger this skill
 trigger:
-  - "Need to understand how a feature/system works across the codebase"
-  - "Starting work on unfamiliar codebase or component"
-  - "Planning changes that span multiple layers/components"
-  - "User asks 'how does X work?' for non-trivial X"
-  - "Need architecture understanding before implementation"
+  - "understand this codebase"
+  - "explore the architecture"
+  - "how is this code organized"
+  - "how does [feature] work across the system"
+  - "give me an overview of this project"
+  - "starting work on unfamiliar codebase or component"
+  - "planning changes that span multiple layers/components"
+  - "map the dependencies / module boundaries"
+  - "trace how [data/request] flows through the system"
 
 # Valid reasons to skip (keep minimal)
 skip_when:
   - "Pure reference lookup (function signature, type definition)"
   - "Checking if specific file exists (yes/no question)"
-  - "Reading error message from known file location"
-
-# INVALID skip reasons - these trigger red flags
-invalid_skip_reasons:
-  - reason: "I already know the architecture"
-    counter: "Prior knowledge is incomplete. Discovery validates assumptions and reveals what changed."
-    severity: "high"
-    
-  - reason: "Simple question about location"
-    counter: "Location without context is incomplete. One exploration answers current + future questions."
-    severity: "medium"
-    
-  - reason: "Production emergency, no time"
-    counter: "High stakes demand MORE rigor. 6-10 min discovery prevents hours of wrong assumptions."
-    severity: "critical"
-    
-  - reason: "Colleague told me the structure"
-    counter: "High-level ≠ implementation details. Discovery finds what they forgot or didn't know."
-    severity: "high"
-    
-  - reason: "Grep is faster for this"
-    counter: "One systematic exploration > multiple ad-hoc greps + follow-up questions."
-    severity: "medium"
-    
-  - reason: "This is overkill"
-    counter: "Incomplete understanding compounds. The cost of skipping > cost of doing."
-    severity: "medium"
-    
-  - reason: "I'll explore progressively if I get stuck"
-    counter: "Reactive exploration is less efficient than proactive discovery."
-    severity: "low"
-    
-  - reason: "Let me just quickly check..."
-    counter: "Ad-hoc investigation trap. Systematic beats quick every time."
-    severity: "medium"
+  - "Reading a single known file"
+  - "User explicitly asked for grep/find, not exploration"
 
 # Embedded agents
 agents:
@@ -65,7 +37,7 @@ agents:
     model: "haiku"
     tools: ["Read", "Glob", "Grep", "Bash"]
     spawn: "single"
-    
+
   - path: "agents/deep-dive-agent.md"
     name: "deep-dive-agent"
     role: "phase-2"
@@ -81,17 +53,17 @@ hooks:
       script: "hooks/pre-tool-use.js"
       timeout: 5000
       purpose: "Prevent grep/find shortcuts that bypass systematic discovery"
-      
+
     - matcher: "Grep"
       script: "hooks/validate-grep-context.js"
       timeout: 3000
       purpose: "Ensure grep is used for exploration, not as shortcut"
-      
+
   SubagentStop:
     - script: "hooks/validate-completion.js"
       timeout: 5000
       purpose: "Validate subagent completed all required sections"
-      
+
   Stop:
     - script: "hooks/validate-exit-criteria.js"
       timeout: 5000
@@ -104,7 +76,7 @@ platforms:
     install_path: "~/.claude/skills/exploring-codebase/"
     agents_path: "~/.claude/agents/"
     hooks_merge: true
-    
+
 # Output expectations
 output:
   format: "markdown"

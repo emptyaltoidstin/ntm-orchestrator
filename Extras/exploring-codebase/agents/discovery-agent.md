@@ -1,6 +1,5 @@
 ---
 name: discovery-agent
-version: 1.0.0
 description: "Discovers codebase architecture, components, layers, and boundaries"
 role: "phase-1"
 model: haiku
