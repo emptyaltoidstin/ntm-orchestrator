@@ -53,6 +53,34 @@ Write JSON updates at start, after major progress, on blocker, and at completion
 {"task_id":"{{task_label}}","status":"in_progress","files_modified":[],"gates_passed":false,"last_update_ts":"<ISO-8601>","blocker":null}
 ```
 
+## Context Pressure Protocol
+
+If you notice context pressure (auto-compact warnings, degradation in your responses, or your context feeling very long):
+
+1. **Immediately** update your worker state file with current progress:
+   ```json
+   {"task_id":"{{task_label}}","status":"in_progress","files_modified":["<files you changed>"],"gates_passed":false,"last_update_ts":"<ISO-8601>","blocker":"context-pressure"}
+   ```
+2. Send an urgent message to the Orchestrator:
+   ```javascript
+   send_message({
+     project_key: '{{project_slug}}',
+     sender_name: '{{pane_name}}',
+     to: ['Orchestrator'],
+     subject: '[context-warning] {{task_label}}',
+     body_md: `
+   Context Pressure Alert
+
+   Task: {{task_label}}
+   Progress so far: <what you accomplished>
+   Files modified: <list files>
+   Remaining work: <what still needs doing>
+   Worker state file: updated
+   `
+   })
+   ```
+3. **Stop working and wait** for the Orchestrator to respond. Do not continue — the Orchestrator will refresh your context and send a continuation prompt with your prior state.
+
 ## Architecture Context
 
 Before starting, check for architecture documentation:

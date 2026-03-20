@@ -1,6 +1,6 @@
 ---
 name: ntm-orchestrator
-version: 1.1.0
+version: 1.2.0
 description: |
   Spawn and orchestrate an ntm multi-agent session from within Claude Code.
   Plans work distribution, sends targeted prompts, monitors progress via
@@ -78,7 +78,7 @@ See `references/ntm-commands.md` for detailed documentation.
 
 ## State Tracking
 
-Maintain this block in your working memory. Update after every phase transition and every poll cycle.
+Maintain this block in your working memory **and persist to disk** after every phase transition and every poll cycle.
 
 ```
 SKILL: ntm-orchestrator
@@ -94,6 +94,44 @@ REFRESHES: {pane0: 0, pane1: 0, ...}
 ESCALATION_NEEDED: [none | scope-ambiguity | priority-conflict | systemic-failure | security | timeout | destructive-op | quality-bypass]
 ESCALATION_REASON: <if applicable>
 ```
+
+### Disk Persistence
+
+After every phase transition and every poll cycle, write the state as JSON:
+
+```bash
+RUNTIME_DIR="${NTM_ORCH_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ntm-orch-$(id -u)}"
+# Write to: $RUNTIME_DIR/<session>/orchestrator-state.json
+```
+
+Schema:
+```json
+{
+  "skill": "ntm-orchestrator",
+  "phase": "3-Monitor",
+  "session": "<name>",
+  "agents": {"total": 10, "active": 8, "complete": 1, "failed": 1},
+  "tasks": {"total": 10, "assigned": 10, "complete": 1},
+  "last_poll": "<ISO>",
+  "last_terse": "<hash>",
+  "next_poll": "<ISO>",
+  "interventions": 2,
+  "refreshes": {"pane0": 0, "pane1": 1},
+  "escalation_needed": "none",
+  "escalation_reason": null,
+  "updated_at": "<ISO>"
+}
+```
+
+### Recovery After Compaction
+
+If you have no memory of your current orchestration state (e.g. after context compaction), read these files to resume:
+
+1. `<runtime>/<session>/orchestrator-state.json` — your last known state
+2. `<runtime>/<session>/manifest.json` — the task manifest
+3. `fetch_inbox(project_key, agent_name="Orchestrator")` — any messages received while context was compacting
+
+Resume from the phase recorded in `orchestrator-state.json`. Re-read per-pane state files to reconcile agent progress.
 
 **When `ESCALATION_NEEDED` is not `none`, pause all other work and invoke AskUserQuestion immediately.**
 
@@ -419,12 +457,19 @@ Worker state schema:
    - `completion_pct == 100` → Phase 4
 
 5. **Inbox check:** `fetch_inbox(project_key, agent_name="Orchestrator")`
+   - **Priority:** handle `[context-warning]` messages immediately — initiate context refresh procedure (see `patterns/context-refresh.md`)
 
-6. **Update state tracking**
+6. **Agent context health (30+ min window only):**
+   ```bash
+   ntm --robot-agent-health=<session> --panes=<all_active_panes>
+   ```
+   If any agent's context is below 30%, proactively initiate the context refresh procedure even if the agent hasn't self-reported yet.
 
-7. **Check escalation triggers**
+7. **Update state tracking** — write `orchestrator-state.json`
 
-8. **Calculate next poll time**
+8. **Check escalation triggers**
+
+9. **Calculate next poll time**
 
 ### Intervention Patterns
 
@@ -437,7 +482,9 @@ Worker state schema:
 | Agent stall (>10 min idle) | Nudge, inspect pane state; tail fallback only if needed |
 | Agent completes task | Send `post-implementation-review.md` before accepting |
 | Agent idle after completion | Redeploy with `agent-peer-review.md` to review another agent's work |
-| Context exhaustion | Use refresh pattern |
+| `[context-warning]` inbox message | Initiate context refresh: interrupt → capture → continuation prompt |
+| Context exhaustion (behavioral) | Nudge first; if unresponsive, initiate context refresh |
+| `--robot-agent-health` context < 30% | Proactively initiate context refresh even if agent hasn't reported |
 | Investigation exceeds threshold | Delegate anomaly triage to a short-lived sub-agent |
 | Quality gate failure | Agent must fix; do not accept completion |
 | Destructive action request | **ALWAYS escalate** |
@@ -453,20 +500,13 @@ Do not deep-dive implementation details in the orchestrator context.
 
 ### Context Refresh Pattern
 
-**Claude Code:**
-```bash
-ntm --robot-tail=<session> --panes=<N> --lines=100
-ntm send <session> --pane=<N> "/clear" --json
-sleep 5
-ntm send <session> --pane=<N> --file=<runtime>/<session>/pane-<N>.md --json
-```
+See `patterns/context-refresh.md` for the full procedure. Condensed flow:
 
-**Codex:**
-```bash
-ntm send <session> --pane=<N> "/new" --json
-sleep 5
-ntm send <session> --pane=<N> --file=<runtime>/<session>/pane-<N>.md --json
-```
+1. **Interrupt** agent if still working (`--robot-interrupt`); skip if agent sent `[context-warning]`
+2. **Capture** worker state JSON + `git diff --stat` + last Agent Mail message
+3. **Build continuation prompt** from `templates/agent-prompt-continuation.md` with captured state
+4. **Send refresh** — `/clear` (Claude Code) or `/new` (Codex)
+5. **Send continuation prompt** — agent resumes with knowledge of prior progress
 
 Track in `REFRESHES[pane]`. After 2 refreshes without progress → escalate.
 
@@ -593,4 +633,38 @@ Runtime marker cleanup is handled by hook-managed exact-path deletion on `ntm ki
 | Synthesis | ~2,000 | 1 | ~2,000 |
 | **Total** | | | **~14,400** |
 
-If context runs low: write handoff to Agent Mail, create handoff bead, stop gracefully.
+### Orchestrator Self-Preservation
+
+Your own context can exhaust during long sessions. Before that happens, write a handoff:
+
+1. **Write final `orchestrator-state.json`** — this should already be current from periodic writes (see State Tracking). Verify it's up to date.
+2. **Send Agent Mail handoff message:**
+   ```javascript
+   send_message({
+     project_key: '<slug>',
+     sender_name: 'Orchestrator',
+     to: ['Orchestrator'],
+     subject: '[orchestrator-handoff]',
+     body_md: `
+   Phase: <current phase>
+   Session: <session name>
+   Active agents: <count> (<pane list>)
+   Incomplete tasks: <task ids>
+   Pending escalations: <any>
+   State file: <runtime>/<session>/orchestrator-state.json
+   Manifest: <runtime>/<session>/manifest.json
+   `
+   })
+   ```
+3. **Create a handoff bead** (if `br` is available):
+   ```bash
+   br create --title "Resume orchestration: <session>" --json
+   ```
+4. **Inform the user** that orchestration can be resumed by re-entering the skill — the state file and manifest on disk provide continuity.
+
+**Signs you are approaching context limits:**
+- Your responses are getting slow or incomplete
+- You've been running for 30+ minutes with many interventions
+- You notice your own context summaries losing detail
+
+When in doubt, write the handoff proactively. The cost of an unnecessary handoff is low; the cost of losing orchestration state is a stranded session.

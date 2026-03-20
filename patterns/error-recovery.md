@@ -59,38 +59,28 @@ Don't manually restart agents — let `--spawn-auto-restart` handle it. Only esc
 
 ## Context Exhaustion
 
-### Detection
-- Agent reports "context limit" or "token limit"
-- Performance degradation (slow responses, incomplete work)
-- Agent explicitly requests refresh
+### Detection (in priority order)
 
-### Recovery: Context Refresh
+1. **`[context-warning]` inbox message** — agent self-reported via Agent Mail. Highest confidence. Agent has already saved state and stopped working.
+2. **`--robot-agent-health` context < 30%** — proactive detection during 30+ min polling. Agent may still be working.
+3. **Behavioral signals** — agent reports "context limit", performance degrades, or agent explicitly requests refresh. Nudge before refreshing.
 
-**Claude Code panes:**
-```bash
-# 1. Capture diagnostics if needed
-ntm --robot-tail=<session> --panes=<N> --lines=100
+### Recovery: Interrupt → Capture → Continuation
 
-# 2. Send refresh command
-ntm send <session> --pane=<N> "/clear" --json
+See `patterns/context-refresh.md` for the full 7-step procedure. Summary:
 
-# 3. Wait for refresh
-sleep 5
+1. **Interrupt** the agent (`--robot-interrupt`) if it hasn't already stopped via `[context-warning]`
+2. **Capture state** — worker state JSON, `git diff --stat`, last Agent Mail message, tail output
+3. **Build continuation prompt** — fill `templates/agent-prompt-continuation.md` with captured state
+4. **Send refresh** — `/clear` (Claude Code) or `/new` (Codex)
+5. **Send continuation prompt** — the agent resumes with full knowledge of prior progress
 
-# 4. Re-send task prompt with current state
-ntm send <session> --pane=<N> --file=<runtime>/<session>/pane-<N>.md --json
-```
-
-**Codex panes:**
-```bash
-ntm send <session> --pane=<N> "/new" --json
-sleep 5
-ntm send <session> --pane=<N> --file=<runtime>/<session>/pane-<N>.md --json
-```
+The agent receives a continuation prompt instead of the original task prompt. This prevents it from starting over blind.
 
 ### Tracking
 
 Increment `REFRESHES[pane]` after each refresh. After 2 refreshes on same task without progress:
+
 - Set `ESCALATION_NEEDED: systemic-failure`
 - Options: reassign task, split task smaller, or mark blocked
 
